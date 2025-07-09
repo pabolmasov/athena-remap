@@ -43,6 +43,63 @@
 //!     bool noop=false)
 //! \brief Read a single dataset from an HDF5 file into a pre-allocated array.
 
+Real HDF5RealAttribute(const char *filename, const char *attribute_name){
+  // reading a Real attribute with a given name
+  Real attribute_value;
+  hid_t property_list_file = H5Pcreate(H5P_FILE_ACCESS);
+  hid_t file = H5Fopen(filename, H5F_ACC_RDONLY, property_list_file);
+  hid_t attr = H5Aopen(file, attribute_name, H5P_DEFAULT);
+  H5Aread(attr, H5T_REAL, &attribute_value);
+  H5Pclose(property_list_file);
+  H5Aclose(attr);
+  H5Fclose(file);
+  std::cout << "read from "<< filename << ": attribute " << attribute_name << " = " << attribute_value << "\n";
+  return attribute_value;
+}
+
+int HDF5IntAttribute(const char *filename, const char *attribute_name){
+  // reading a Real attribute with a given name
+  int attribute_value;
+  hid_t property_list_file = H5Pcreate(H5P_FILE_ACCESS);
+  hid_t file = H5Fopen(filename, H5F_ACC_RDONLY, property_list_file);
+  hid_t attr = H5Aopen(file, attribute_name, H5P_DEFAULT);
+  H5Aread(attr, H5T_NATIVE_INT, &attribute_value);
+  H5Pclose(property_list_file);
+  H5Aclose(attr);
+  H5Fclose(file);
+  std::cout << "read from "<< filename << ": attribute " << attribute_name << " = " << attribute_value << "\n";
+  return attribute_value;
+}
+
+
+void HDF5TripleRealAttribute(const char *filename, const char *attribute_name, Real* value_array){
+  // reading a Real attribute with a given name
+  hid_t property_list_file = H5Pcreate(H5P_FILE_ACCESS);
+  hid_t file = H5Fopen(filename, H5F_ACC_RDONLY, property_list_file);
+  hid_t attr = H5Aopen(file, attribute_name, H5P_DEFAULT);
+  H5Aread(attr, H5T_REAL, value_array);
+  H5Pclose(property_list_file);
+  H5Aclose(attr);
+  H5Fclose(file);
+  std::cout << "read from "<< filename << ": attribute " << attribute_name << " = " << value_array[0] << ", " << value_array[1] << \
+", " << value_array[2] << "\n";
+}
+
+void HDF5TripleIntAttribute(const char *filename, const char *attribute_name, int* value_array){
+  // reading a Real attribute with a given name
+  hid_t property_list_file = H5Pcreate(H5P_FILE_ACCESS);
+  hid_t file = H5Fopen(filename, H5F_ACC_RDONLY, property_list_file);
+  hid_t attr = H5Aopen(file, attribute_name, H5P_DEFAULT);
+  H5Aread(attr, H5T_NATIVE_INT, value_array);
+  H5Pclose(property_list_file);
+  H5Aclose(attr);
+  H5Fclose(file);
+  std::cout << "read from "<< filename << ": attribute " << attribute_name << " = " << value_array[0] << ", " << value_array[1] << \
+", " << value_array[2] << "\n";
+}
+
+
+
 void HDF5ReadRealArray(const char *filename, const char *dataset_name, int rank_file,
                        const int *start_file, const int *count_file, int rank_mem,
                        const int *start_mem, const int *count_mem,
