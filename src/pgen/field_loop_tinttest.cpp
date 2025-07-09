@@ -3,23 +3,19 @@
 // Copyright(C) 2014 James M. Stone <jmstone@princeton.edu> and other code contributors
 // Licensed under the 3-clause BSD License, see LICENSE file for details
 //========================================================================================
-//! \file field_loop.cpp
-//! \brief Problem generator for advection of a field loop test.
+//! \file field_loop_tinttest.cpp
+//! \brief Field loop advection with AMR; based on the original field_loop pgen iprob=1 (XY-plane loop)
 //!
 //! Can only be run in 2D or 3D.  Input parameters are:
 //!  -  problem/rad   = radius of field loop
 //!  -  problem/amp   = amplitude of vector potential (and therefore B)
-//!  -  problem/vflow = flow velocity
-//!  -  problem/drat  = density ratio in loop, to test density advection and conduction
-//! The flow is automatically set to run along the diagonal.
-//!
-//! Various test cases are possible:
-//!  - (iprob=1): field loop in x1-x2 plane (cylinder in 3D)
-//!  - (iprob=2): field loop in x2-x3 plane (cylinder in 3D)
-//!  - (iprob=3): field loop in x3-x1 plane (cylinder in 3D)
-//!  - (iprob=4): rotated cylindrical field loop in 3D.
-//!  - (iprob=5): spherical field loop in rotated plane
-//!
+//!  -  problem/x0 = X coordinate of the loop center (=0 by default)
+//!  -  problem/y0 = Y coordinate of the loop center (=0 by default)
+//!  -  problem/vflowx = flow velocity X direction (=0 by default)
+//!  -  problem/vflowy = flow velocity Y direction (=0 by default)
+//!  -  problem/vflowz = flow velocity Z direction (=0 by default)
+//!  -  problem/drat  = density ratio in loop, to test density advection and conduction (1 by defaults)
+//!  -  problem/bthresh =  magnetic field cut-off for AMR
 //! REFERENCE: T. Gardiner & J.M. Stone, "An unsplit Godunov method for ideal MHD via
 //! constrined transport", JCP, 205, 509 (2005)
 //========================================================================================
@@ -59,12 +55,11 @@ Real bsqthresh ;
 
 void Mesh::InitUserMeshData(ParameterInput *pin) {
     
-    // AMR setup:
-    if (adaptive==true){
-        EnrollUserRefinementCondition(RefinementCondition);
-        bsqthresh = pin->GetReal("problem", "bsqthresh");
-    }
-    
+  // AMR setup:
+  if (adaptive==true){
+    EnrollUserRefinementCondition(RefinementCondition);
+    bsqthresh = SQR(pin->GetReal("problem", "bthresh"));
+  }   
 }
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
@@ -83,53 +78,20 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   // Read initial conditions, diffusion coefficients (if needed)
   Real rad = pin->GetReal("problem","rad");
   Real amp = pin->GetReal("problem","amp");
-  Real vflow_x = pin->GetReal("problem","vflowx");
-Real vflow_y = pin->GetReal("problem","vflowy");
-Real vflow_z = pin->GetReal("problem","vflowz");
+  Real vflow_x = pin->GetOrAddReal("problem","vflowx", 0.);
+  Real vflow_y = pin->GetOrAddReal("problem","vflowy", 0.);
+  Real vflow_z = pin->GetOrAddReal("problem","vflowz", 0.);
   Real drat = pin->GetOrAddReal("problem","drat",1.0);
-  int iprob = pin->GetInteger("problem","iprob");
-  Real omega0 = porb->Omega0;
-  Real qshear = porb->qshear;
-  Real ang_2, cos_a2(0.0), sin_a2(0.0), lambda(0.0);
-
-  // For (iprob=4) -- rotated cylinder in 3D -- set up rotation angle and wavelength
-  if (iprob == 4) {
-    Real x1size = pmy_mesh->mesh_size.x1max - pmy_mesh->mesh_size.x1min;
-    Real x3size = pmy_mesh->mesh_size.x3max - pmy_mesh->mesh_size.x3min;
-
-    // We put 1 wavelength in each direction.  Hence the wavelength
-    //     lambda = x1size*cos_a;
-    //     AND   lambda = x3size*sin_a;  are both satisfied.
-
-    if (x1size == x3size) {
-      // ang_2 = PI/4.0;  // unused variable
-      cos_a2 = sin_a2 = std::sqrt(0.5);
-    } else {
-      ang_2 = std::atan(x1size/x3size);
-      sin_a2 = std::sin(ang_2);
-      cos_a2 = std::cos(ang_2);
-    }
-    // Use the larger angle to determine the wavelength
-    if (cos_a2 >= sin_a2) {
-      lambda = x1size*cos_a2;
-    } else {
-      lambda = x3size*sin_a2;
-    }
-  }
 
   // Use vector potential to initialize field loop
   // the origin of the initial loop
   Real x0 = pin->GetOrAddReal("problem","x0",0.0);
   Real y0 = pin->GetOrAddReal("problem","y0",0.0);
-    Real mz = pin->GetOrAddReal("problem","mz",0.0);
-  // Real z0 = pin->GetOrAddReal("problem","z0",0.0);
+  // Real mz = pin->GetOrAddReal("problem","mz",0.0);
 
   for (int k=ks; k<=ke+1; k++) {
     for (int j=js; j<=je+1; j++) {
-      for (int i=is; i<=ie+1; i++) {
-	
-        // (iprob=1): field loop in x1-x2 plane (cylinder in 3D) */
-        if (iprob==1) {
+      for (int i=is; i<=ie+1; i++) {	
           ax(k,j,i) = 0.0;
           ay(k,j,i) = 0.0;
           if ((SQR(pcoord->x1f(i)-x0) + SQR(pcoord->x2f(j)-y0)) < rad*rad) {
@@ -139,84 +101,6 @@ Real vflow_z = pin->GetReal("problem","vflowz");
           } else {
             az(k,j,i) = 0.0;
           }
-        }
-
-        // (iprob=2): field loop in x2-x3 plane (cylinder in 3D)
-        if (iprob==2) {
-          if ((SQR(pcoord->x2f(j)) + SQR(pcoord->x3f(k))) < rad*rad) {
-            ax(k,j,i) = amp*(rad - std::sqrt(SQR(pcoord->x2f(j)) + SQR(pcoord->x3f(k))));
-          } else {
-            ax(k,j,i) = 0.0;
-          }
-          ay(k,j,i) = 0.0;
-          az(k,j,i) = 0.0;
-        }
-
-        // (iprob=3): field loop in x3-x1 plane (cylinder in 3D)
-        if (iprob==3) {
-          if ((SQR(pcoord->x1f(i)) + SQR(pcoord->x3f(k))) < rad*rad) {
-            ay(k,j,i) = amp*(rad - std::sqrt(SQR(pcoord->x1f(i)) + SQR(pcoord->x3f(k))));
-          } else {
-            ay(k,j,i) = 0.0;
-          }
-          ax(k,j,i) = 0.0;
-          az(k,j,i) = 0.0;
-        }
-
-        // (iprob=4): rotated cylindrical field loop in 3D.  Similar to iprob=1 with a
-        // rotation about the x2-axis.  Define coordinate systems (x1,x2,x3) and (x,y,z)
-        // with the following transformation rules:
-        //    x =  x1*std::cos(ang_2) + x3*std::sin(ang_2)
-        //    y =  x2
-        //    z = -x1*std::sin(ang_2) + x3*std::cos(ang_2)
-        // This inverts to:
-        //    x1  = x*std::cos(ang_2) - z*std::sin(ang_2)
-        //    x2  = y
-        //    x3  = x*std::sin(ang_2) + z*std::cos(ang_2)
-
-        if (iprob==4) {
-          Real x = pcoord->x1v(i)*cos_a2 + pcoord->x3f(k)*sin_a2;
-          Real y = pcoord->x2f(j);
-          // shift x back to the domain -0.5*lambda <= x <= 0.5*lambda
-          while (x >  0.5*lambda) x -= lambda;
-          while (x < -0.5*lambda) x += lambda;
-          if ((x*x + y*y) < rad*rad) {
-            ax(k,j,i) = amp*(rad - std::sqrt(x*x + y*y))*(-sin_a2);
-          } else {
-            ax(k,j,i) = 0.0;
-          }
-          ay(k,j,i) = 0.0;
-
-          x = pcoord->x1f(i)*cos_a2 + pcoord->x3v(k)*sin_a2;
-          y = pcoord->x2f(j);
-          // shift x back to the domain -0.5*lambda <= x <= 0.5*lambda
-          while (x >  0.5*lambda) x -= lambda;
-          while (x < -0.5*lambda) x += lambda;
-          if ((x*x + y*y) < rad*rad) {
-            az(k,j,i) = amp*(rad - std::sqrt(x*x + y*y))*(cos_a2);
-          } else {
-            az(k,j,i) = 0.0;
-          }
-        }
-
-        // (iprob=5): spherical field loop in rotated plane
-        if (iprob==5) {
-          ax(k,j,i) = 0.0;
-          if ((SQR(pcoord->x1f(i)) + SQR(pcoord->x2v(j))
-               + SQR(pcoord->x3f(k))) < rad*rad) {
-            ay(k,j,i) = amp*(rad-std::sqrt(SQR(pcoord->x1f(i)) + SQR(pcoord->x2v(j)) +
-                                           SQR(pcoord->x3f(k))));
-          } else {
-            ay(k,j,i) = 0.0;
-          }
-          if ((SQR(pcoord->x1f(i)) + SQR(pcoord->x2f(j))
-               + SQR(pcoord->x3v(k))) < rad*rad) {
-            az(k,j,i) = amp*(rad-std::sqrt(SQR(pcoord->x1f(i)) + SQR(pcoord->x2f(j)) +
-                                           SQR(pcoord->x3v(k))));
-          } else {
-            az(k,j,i) = 0.0;
-          }
-        }
       }
     }
   }
@@ -237,15 +121,9 @@ Real vflow_z = pin->GetReal("problem","vflowz");
           phydro->u(IM3,k,j,i) = phydro->u(IDN,k,j,i)*vflow_z ; //*x3size/diag;
         if ((SQR(pcoord->x1v(i)) + SQR(pcoord->x2v(j)) + SQR(pcoord->x3v(k))) < rad*rad) {
           phydro->u(IDN,k,j,i) = drat;
-            phydro->u(IM1,k,j,i) = phydro->u(IDN,k,j,i)*vflow_x ; //*x1size/diag;
-            phydro->u(IM2,k,j,i) = phydro->u(IDN,k,j,i)*vflow_y ;// *x2size/diag;
-            phydro->u(IM3,k,j,i) = phydro->u(IDN,k,j,i)*vflow_z ; // *x3size/diag;
-        }
-        if (pmy_mesh->shear_periodic) {
-          Real x1 = pcoord->x1v(i);
-          phydro->u(IM1,k,j,i) += iso_cs*phydro->u(IDN,k,j,i);
-          if(!porb->orbital_advection_defined)
-            phydro->u(IM2,k,j,i) -= qshear*omega0*x1*phydro->u(IDN,k,j,i);
+	  phydro->u(IM1,k,j,i) = phydro->u(IDN,k,j,i)*vflow_x ; //*x1size/diag;
+	  phydro->u(IM2,k,j,i) = phydro->u(IDN,k,j,i)*vflow_y ;// *x2size/diag;
+	  phydro->u(IM3,k,j,i) = phydro->u(IDN,k,j,i)*vflow_z ; // *x3size/diag;
         }
       }
     }
@@ -255,13 +133,8 @@ Real vflow_z = pin->GetReal("problem","vflowz");
   for (int k=ks; k<=ke; k++) {
     for (int j=js; j<=je; j++) {
       for (int i=is; i<=ie+1; i++) {
-	if (iprob == 0){
-	  pfield->b.x1f(k,j,i) = pcoord->x1f(i);
-	}
-	else{
-	  pfield->b.x1f(k,j,i) = (az(k,j+1,i) - az(k,j,i))/pcoord->dx2f(j) -
-	    (ay(k+1,j,i) - ay(k,j,i))/pcoord->dx3f(k);
-	}
+	pfield->b.x1f(k,j,i) = (az(k,j+1,i) - az(k,j,i))/pcoord->dx2f(j) -
+	  (ay(k+1,j,i) - ay(k,j,i))/pcoord->dx3f(k);	
       }
     }
   }
