@@ -14,6 +14,8 @@ import h5py
 # from scipy.integrate import simpson
 # from scipy.integrate import cumulative_trapezoid as cumtrapz
 
+# visualization for slowSW 2D pictures
+
 from os.path import exists
 
 ifplot = True
