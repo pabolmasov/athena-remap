@@ -4,7 +4,7 @@
 // Licensed under the 3-clause BSD License, see LICENSE file for details
 //========================================================================================
 //! \file tint.cpp
-//! \brief interpolates an HDF5 output (conservative + B) and creates a starting file for a TDE simulation
+//! \brief interpolates an HDF5 output (conservative + B) and creates a restarting file for a TDE simulation
 //! based on from_array.cpp
 
 // C headers
@@ -53,16 +53,25 @@ using std::ifstream; // reading and writing files
 //!   - MeshBlock/nx1
 //!
 
-int RefinementCondition(MeshBlock *pmb);
-int RefinementCondition_Bonly(MeshBlock *pmb);
+#if !MAGNETIC_FIELDS_ENABLED
+#error "This problem generator requires magnetic fields"
+#endif
 
-Real BHgfun(Real x, Real y, Real z);
+#if NSCALARS < 1
+#error "This problem generator requires at least one passive scalar variable"
+#endif
+
+int RefinementCondition(MeshBlock *pmb); // proper refinement condition used for the TDE problem
+int RefinementCondition_Bonly(MeshBlock *pmb); // simple refinement condition using only a cut-off MF value
+
+Real BHgfun(Real x, Real y, Real z); //  black hole gravity g as a function of distance
 
 void BHgrav(MeshBlock *pmb, const Real time, const Real dt,
 	    const AthenaArray<Real> &prim, const AthenaArray<Real> &prim_scalar,
 	    const AthenaArray<Real> &bcc, AthenaArray<Real> &cons,
-	    AthenaArray<Real> &cons_scalar);
+	    AthenaArray<Real> &cons_scalar); // BH gravity and more
 
+/*
 void Bdiff_scalar(MeshBlock *pmb, const Real time, const Real dt,
 		  const AthenaArray<Real> &prim, const AthenaArray<Real> &prim_scalar,
 		  const AthenaArray<Real> &bcc, AthenaArray<Real> &cons,
@@ -75,7 +84,9 @@ void Bclean(MeshBlock *pmb, const Real time, const Real dt,
 	    const AthenaArray<Real> &prim, const AthenaArray<Real> &prim_scalar,
 	    const AthenaArray<Real> &bcc, AthenaArray<Real> &cons,
 	    AthenaArray<Real> &cons_scalar);
+*/ // probably I do not use this, check!
 
+// ideal conductor + outflow BCs (ensure divB = 0 at the boundaries)
 
 void DumbBoundaryInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
 			 FaceField &b, Real time, Real dt,
@@ -102,7 +113,7 @@ void DumbBoundaryOuterX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &pr
 			 int il, int iu, int jl, int ju, int kl, int ku, int ngh);
 
 
-Real MyTimeStep(MeshBlock *pmb);
+Real MyTimeStep(MeshBlock *pmb); // not used??
 
 namespace{
   Real tzero, tper, addmass, rper, Mcoeff ;
@@ -121,34 +132,25 @@ namespace{
   // Real Bint_linearX(AthenaArray<Real> &u, int index1, int index2, Real k, Real j, Real i_f, int order);
   void star_coord(Real time, Real* xstar, Real* ystar, Real* zstar, Real* vx, Real* vy, Real* vz);
   // void intcurl(AthenaArray<Real>& A1, AthenaArray<Real>& A2, AthenaArray<Real>& A3, Real kav, Real jav, Real iav, Real kavf, Real javf, Real iavf, Real* b1, Real* b2, Real* b3);
-  Real splint(AthenaArray<Real>& A, Real kav, Real jav, Real iav, Real dk, Real dj, Real di, int splitlevel, bool verboseflag);
+
+  Real splint(AthenaArray<Real>& A, Real kav, Real jav, Real iav, Real dk, Real dj, Real di, int splitlevel, bool verboseflag); // correct Avec interpolation
+  
   Real Acurl(AthenaArray<Real>& A, Real k, Real j, Real i);
   Real x1min;
   
-  bool levelpressure, ifcomoving;
-
-  bool ifavec;
-
-  bool ifnearest;
-
-  bool ifevacuate;
-
-  bool carved;
-
-  bool ifbonly;
+  bool levelpressure, ifcomoving, ifavec, ifnearest, ifevacuate, carved, ifbonly;
 
   int maxsplit;
 }
 
 Real thresh, Rthresh, bsqthresh;
 Real BHgmax, rgrav, rBH;
-bool ifXYZ, ifstitcher, ifdiffscalar, ifbclean, ifBcleandecay, fromXYZ;
+bool ifXYZ, ifstitcher, fromXYZ;
 Real refden, refB; 
 Real bomega, omega, divBmaxLimit, divatol, tclean, Bdecayfactor ;
 
 bool ifcentrelens;
-
-Real rcentrecircle = 2000.; 
+Real rcentrecircle; 
 
 void Mesh::InitUserMeshData(ParameterInput *pin) {
     
@@ -160,9 +162,9 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
     tper = pin->GetReal("problem","tper");
 
-    addmass = pin->GetReal("problem","mBH");
+    addmass = pin->GetReal("problem","mBH"); // black hole mass. may be 0
     rgrav = (addmass/1.e6) * 2.1218 ; // GM_{\rm BH}/c^2
-    rBH = pin->GetOrAddReal("problem","rBH", rgrav); // makes sense to make it larger
+    rBH = pin->GetOrAddReal("problem","rBH", rgrav); // makes sense to make it larger; different potential inside rBH
 
     rper = pin->GetReal("problem","rper");
 
@@ -176,19 +178,18 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
     rotangle = pin->GetOrAddReal("problem","rotangle", 0.); // TODO: set this up!
     
-    ifXYZ = pin->GetOrAddBoolean("problem", "ifXYZ", "true");
-    fromXYZ = pin->GetOrAddBoolean("problem", "fromXYZ", "false");
+    ifXYZ = pin->GetOrAddBoolean("problem", "ifXYZ", "true"); // to a BH frame box
+    fromXYZ = pin->GetOrAddBoolean("problem", "fromXYZ", "false"); // from a BH frame box
 
-    ifstitcher = pin->GetOrAddBoolean("problem", "ifstitcher", "false");
-    ifdiffscalar = pin->GetOrAddBoolean("problem", "ifdiffscalar", "false");
-    ifbclean = pin->GetOrAddBoolean("problem", "ifbclean", "false");
-    ifBcleandecay = pin->GetOrAddBoolean("problem", "ifBcleandecay", "false");
-    ifevacuate = pin->GetOrAddBoolean("problem", "ifevacuate", "false");
+    ifstitcher = pin->GetOrAddBoolean("problem", "ifstitcher", "false"); // turning off gravity with decreasing s
+    // ifbclean = pin->GetOrAddBoolean("problem", "ifbclean", "false");
+    // ifBcleandecay = pin->GetOrAddBoolean("problem", "ifBcleandecay", "false");
+    ifevacuate = pin->GetOrAddBoolean("problem", "ifevacuate", "false"); // mass loss from the BH vicinity
 
-    carved = pin->GetOrAddBoolean("problem", "ifcarved", "false");
+    carved = pin->GetOrAddBoolean("problem", "ifcarved", "false"); // this is a memory-concerving trick: from the initial data arrays, only the parts that fit the new grid were used
 
-    levelpressure = pin->GetOrAddBoolean("problem", "levelpressure", "false");
-    ifcomoving = pin->GetOrAddBoolean("problem", "ifcomoving", "false");
+    levelpressure = pin->GetOrAddBoolean("problem", "levelpressure", "false"); // if true, overwrites the pressure with the equilibrium pressure distribution from the background
+    ifcomoving = pin->GetOrAddBoolean("problem", "ifcomoving", "false"); 
 
     refden = pin->GetReal("problem","refden");
     refB = pin->GetReal("problem","refB");
@@ -220,12 +221,13 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     }
     if (adaptive) {
       if (ifbonly){
+	bsqthresh = SQR(pin->GetReal("problem", "bthresh")); // MF cut-off
 	EnrollUserRefinementCondition(RefinementCondition_Bonly);
       }else{
-	EnrollUserRefinementCondition(RefinementCondition);
+	EnrollUserRefinementCondition(RefinementCondition);      
+	thresh = pin->GetReal("problem", "thresh"); // cell-to-cell variation threshold for refinement
+	Rthresh = pin->GetReal("problem", "Rthresh"); // tracer cut-off for refinement
       }
-      thresh = pin->GetReal("problem", "thresh"); // cell-to-cell variation threshold for refinement
-      Rthresh = pin->GetReal("problem", "Rthresh"); // tracer cut-off for refinement
     }
 
     // user-defined BC (outflow for hydro, infinite conductor for B):
@@ -233,7 +235,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     std::string outer_Xboundary = pin->GetString("mesh", "ox1_bc");
     std::string inner_Yboundary = pin->GetString("mesh", "ix2_bc");                                         
     std::string outer_Yboundary = pin->GetString("mesh", "ox2_bc");
-    std::string inner_Zboundary = pin->GetString("mesh", "ix3_bc");                                             std::string outer_Zboundary = pin->GetString("mesh", "ox3_bc");
+    std::string inner_Zboundary = pin->GetString("mesh", "ix3_bc");
+    std::string outer_Zboundary = pin->GetString("mesh", "ox3_bc");
 
     if (inner_Xboundary == "user")EnrollUserBoundaryFunction(BoundaryFace::inner_x1, DumbBoundaryInnerX1);
     if (outer_Xboundary == "user")EnrollUserBoundaryFunction(BoundaryFace::outer_x1, DumbBoundaryOuterX1);
@@ -247,8 +250,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
       star_coord(0., &xBH, &yBH, &zBH, &vxBH, &vyBH, &vzBH);
       xBH = -xBH; yBH = -yBH; zBH = -zBH;
-      vxBH = -vxBH; vyBH = -vyBH; vzBH = -vzBH; // do we need the velocity of the BH?                                               
-
+      vxBH = -vxBH; vyBH = -vyBH; vzBH = -vzBH; // do we need the velocity of the BH?
+      
       BH0 = BHgfun(-xBH, -yBH, -zBH);
       BH0x = -xBH/std::sqrt(SQR(xBH)+SQR(yBH)+SQR(zBH)) * BH0;
       BH0y = -yBH/std::sqrt(SQR(xBH)+SQR(yBH)+SQR(zBH)) * BH0;
@@ -582,7 +585,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 	}
 	
 	//	if (carved){
-	// because we carved a fraction of the initial array
+	// because we carved a fraction of the original array
 	start_file_a1[0] = start_file_a2[0] = start_file_a3[0] = startz;
 	start_file_a1[1] = start_file_a2[1] = start_file_a3[1] = starty;
 	start_file_a1[2] = start_file_a2[2] = start_file_a3[2] = startx;	  
@@ -802,10 +805,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 		    }
 		  }
 		}
-
               npoints(k,j,i) ++;
 	      }
-
 	    }
 	  }
 	}
@@ -833,25 +834,20 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
       // splitlevel = 0; //!!! temporary
       std::cout << "refinement level = " << loc.level - pmy_mesh->root_level << "; " ; 
       std::cout << "split level = " << splitlevel << "\n";
-      // getchar();
-      
-      //	getchar();
+      // (refinement level) + (split level)  = constant
+
       Real ax00, ax01, ax10, ay00, ay01, ay10, az00, az01, az10;
 
-      //      Real xref = -0.734375, yref = -0.309375, zref = 0.309375; // !!!temporary
-      //  -0.734375, -0.309375, 0.275
-      
       int ghostbuffer = 1;
       for (int k = ks-ghostbuffer; k <= ke+ghostbuffer; k++) {
 	for (int j = js-ghostbuffer; j <= je+ghostbuffer; j++) {
 	  for (int i = is-ghostbuffer; i <= ie+ghostbuffer; i++) {
 	    Real x = pcoord->x1v(i)-addx, y = pcoord->x2v(j)-addy, z = pcoord->x3v(k)-addz;
 	    Real xf = pcoord->x1f(i)-addx, yf = pcoord->x2f(j)-addy, zf = pcoord->x3f(k)-addz;
-	    //	    xf = xref; yf = yref ; zf = zref ; //!!!temporary
 	    Real x1 = x * std::cos(rotangle) + y * std::sin(rotangle), y1 = y * std::cos(rotangle) - x * std::sin(rotangle);
-	    Real xf1 = xf * std::cos(rotangle) + yf * std::sin(rotangle), yf1 = yf * std::cos(rotangle) - xf * std::sin(rotangle);
-	    // xf1 = xf ; yf1 = yf; // !!!temporary!!!
-	    Real xf1shift = (xf+dxf) * std::cos(rotangle) + (yf+dyf) * std::sin(rotangle), yf1shift = (yf+dyf) * std::cos(rotangle) - (xf+dxf) * std::sin(rotangle);
+	    Real xf1 = xf * std::cos(rotangle) + yf * std::sin(rotangle), yf1 = yf * std::cos(rotangle) - xf * std::sin(rotangle);	    
+	    Real xf1shift = (xf+dxf) * std::cos(rotangle) + (yf+dyf) * std::sin(rotangle),
+	      yf1shift = (yf+dyf) * std::cos(rotangle) - (xf+dxf) * std::sin(rotangle);
 
 	    iavf = (xf1-x1a(startx)) / dxold; javf = (yf1-x2a(starty)) / dyold ;  kavf = (zf-x3a(startz)) / dzold;
 	    iavf1 = (xf1shift-x1a(startx)) / dxold ; javf1 = (yf1shift-x2a(starty)) / dyold ;  kavf1 = (zf+dzf-x3a(startz)) / dzold;
@@ -870,7 +866,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 	    // if ((std::abs(xf1-xref) < (dxf*1e-5)) && (std::abs(yf1-yref-dyf)<(dyf*1e-5)) && (std::abs(zf-zref-dzf)<(dzf*1e-5))) vflag = true;
 	    //   if ((std::abs(xf1-xref) < (dxf*1e-5)) && (std::abs(yf1-yref)<(dyf*1e-5)) && (std::abs(zf-zref-dzf)<(dzf*1e-5))) vflag = true;
 	      // if ((std::abs(xf1-xref) < (dxf*1e-5)) && (std::abs(yf1-yref-dyf)<(dyf*1e-5)) && (std::abs(zf-zref)<(dzf*1e-5))) vflag = true;
-	    
+
+	    // vector potentials integrated over the edges of the cell:
 	    az00 = splint(avec3, kavf, javf, iavf, kavf1-kavf, 0., 0., splitlevel, false); 
 	    az10 = splint(avec3, kavf, javf1, iavf, kavf1-kavf, 0., 0., splitlevel, false); 
 	    az01 = splint(avec3, kavf, javf, iavf1, kavf1-kavf, 0., 0., splitlevel, false); 
@@ -896,234 +893,153 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 	    }
 	    */
 	    
+	    // magnetic fields from interpolatec Avec:
 	    pfield->b.x1f(k,j,i) = (az10 - az00) / dyf - (ay10 - ay00) / dzf ;
 	    pfield->b.x2f(k,j,i) = (ax10 - ax00) / dzf - (az01 - az00) / dxf ;
 	    pfield->b.x3f(k,j,i) = (ay01 - ay00) / dxf - (ax01 - ax00) / dyf ;
-
-	    // pfield->b.x1f(k,j,i) = az00; // !!! temporary!
-	    // pfield->b.x2f(k,j,i) = az01; // !!! temporary!
-	    // pfield->b.x3f(k,j,i) = 0.; // !!! temporary!
-	    
 	  }
 	}
       }
-      /*
-      // flux conservation to prevent divergence
-      // left border
-	  for (int i = is-ghostbuffer; i < is; i++) {
-	    for (int k = ks-ghostbuffer; k <= ke+ghostbuffer; k++) {
-	      for (int j = js-ghostbuffer; j <= je+ghostbuffer; j++) {
-		pfield->b.x1f(k,j,i) = pfield->b.x1f(k,j,is) ;
-	      }
-	    }
-	  }
-          // right border
-	  for (int i = ie; i < ie+ghostbuffer; i++) {
-	    for (int k = ks-ghostbuffer; k <= ke+ghostbuffer; k++) {
-	      for (int j = js-ghostbuffer; j <= je+ghostbuffer; j++) {
-		pfield->b.x1f(k,j,i) = pfield->b.x1f(k,j,ie) ;
-	      }
-	    }
-	  }
-	  
-      // left border
-	  for (int j = js-ghostbuffer; j < js; j++) {
-	    for (int k = ks-ghostbuffer; k <= ke+ghostbuffer; k++) {
-	      for (int i = is-ghostbuffer; i <= ie+ghostbuffer; i++) {
-		pfield->b.x2f(k,j,i) = pfield->b.x2f(k,js,i) ;
-	      }
-	    }
-	  }
-          // right border
-	  for (int j = je; j < je+ghostbuffer; j++) {
-	    for (int k = ks-ghostbuffer; k <= ke+ghostbuffer; k++) {
-	      for (int i = is-ghostbuffer; i <= ie+ghostbuffer; i++) {
-		pfield->b.x2f(k,j,i) = pfield->b.x2f(k,je,i) ;
-	      }
-	    }
-	  }
-  
-      // left border
-	  for (int k = ks-ghostbuffer; k < ks; k++) {
-	    for (int j = js-ghostbuffer; j <= je+ghostbuffer; j++) {
-	      for (int i = is-ghostbuffer; i <= ie+ghostbuffer; i++) {
-		pfield->b.x3f(k,j,i) = pfield->b.x3f(ks,j,i) ;
-	      }
-	    }
-	  }
-          // right border
-	  for (int k = ke; k < ke+ghostbuffer; k++) {
-	    for (int j = js-ghostbuffer; j <= je+ghostbuffer; j++) {
-	      for (int i = is-ghostbuffer; i <= ie+ghostbuffer; i++) {
-		pfield->b.x3f(k,j,i) = pfield->b.x3f(ke,j,i) ;
-	      }
-	    }
-	  }
-      */
     }
 
     std::cout << "core " << gid << " interpolation finished \n";
     std::cout << "core " << gid << ": rbox = " << rbox << "\n";
     int maxnpoints = 0;
-    Real entrainfactor = 1.;
+    Real entrainfactor = 1.; // entrainfactor allows for smooth velocity shift between the interpolated stellar material and the new background 
     
     // normalize by the number of points:
     
     for (int k = ks-NGHOST*1; k < ke+NGHOST*1; k++) {
-        for (int j = js-NGHOST*1; j < je+NGHOST*1; j++) {
-	  for (int i = is-NGHOST*1; i < ie+NGHOST*1; i++) {
-	    Real x = pcoord->x1v(i), y = pcoord->x2v(j), z = pcoord->x3v(k); // coords with respect to BH
-	    Real r = std::sqrt(SQR(x)+SQR(y)+SQR(z)), r2star = std::sqrt(SQR(x-addx)+SQR(y-addy)+SQR(z-addz));
-	    Real rhogas = bgdrho * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), -3.)), pgas = bgdp  * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), -3.));
-	    if (ifXYZ){
-	      rhogas = bgdrho  * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), -3.));
-	      pgas = bgdp  * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), -3.));
-	    }
-	    else{
-	      rhogas = bgdrho; 
-	      pgas = bgdp;
-	    }
+      for (int j = js-NGHOST*1; j < je+NGHOST*1; j++) {
+	for (int i = is-NGHOST*1; i < ie+NGHOST*1; i++) {
+	  Real x = pcoord->x1v(i), y = pcoord->x2v(j), z = pcoord->x3v(k); // coords with respect to BH
+	  Real r = std::sqrt(SQR(x)+SQR(y)+SQR(z)), r2star = std::sqrt(SQR(x-addx)+SQR(y-addy)+SQR(z-addz));
+	  Real rhogas = bgdrho * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), -3.)), pgas = bgdp  * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), -3.));
+	  if (ifXYZ){
+	    rhogas = bgdrho  * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), -3.));
+	    pgas = bgdp  * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), -3.));
+	  }
+	  else{
+	    rhogas = bgdrho; 
+	    pgas = bgdp;
+	  }
+	  
+	  if (npoints(k,j,i) > 0){
+	    maxnpoints = std::max(npoints(k,j,i), maxnpoints);
+	    // normalizing by the number of points
+	    phydro->u(IDN, k, j, i) /= (double)npoints(k,j,i) ;
+	    phydro->u(IM1, k, j, i) /= (double)npoints(k,j,i) ;
+	    phydro->u(IM2, k, j, i) /= (double)npoints(k,j,i) ;
+	    phydro->u(IM3, k, j, i) /= (double)npoints(k,j,i) ;
+	    //                    if (NON_BAROTROPIC_EOS) {
+	    phydro->u(IEN, k, j, i) /= (double)npoints(k,j,i) ;
 	    
-	    if (npoints(k,j,i) > 0){
-	      maxnpoints = std::max(npoints(k,j,i), maxnpoints);
-	      // normalizing by the number of points
-	      phydro->u(IDN, k, j, i) /= (double)npoints(k,j,i) ;
-	      phydro->u(IM1, k, j, i) /= (double)npoints(k,j,i) ;
-	      phydro->u(IM2, k, j, i) /= (double)npoints(k,j,i) ;
-	      phydro->u(IM3, k, j, i) /= (double)npoints(k,j,i) ;
-	      //                    if (NON_BAROTROPIC_EOS) {
-	      phydro->u(IEN, k, j, i) /= (double)npoints(k,j,i) ;
-	      
-	      // }
-	      if(NSCALARS>0){
-		for (int n=0; n<NSCALARS;++n){
-		  pscalars->s(n,k,j,i) /= (double)npoints(k,j,i) ;
-		  pscalars->r(n,k,j,i) = std::min(std::max(pscalars->s(n,k,j,i) / phydro->u(IDN, k, j, i), 0.), 1.);
-		  if (phydro->u(IDN, k, j, i)<bgdrho) pscalars->s(n,k,j,i) = pscalars->r(n,k,j,i) = 0.;
-		}
+	    // }
+	    if(NSCALARS>0){
+	      for (int n=0; n<NSCALARS;++n){
+		pscalars->s(n,k,j,i) /= (double)npoints(k,j,i) ;
+		pscalars->r(n,k,j,i) = std::min(std::max(pscalars->s(n,k,j,i) / phydro->u(IDN, k, j, i), 0.), 1.);
+		if (phydro->u(IDN, k, j, i)<bgdrho) pscalars->s(n,k,j,i) = pscalars->r(n,k,j,i) = 0.;
 	      }
-	      /*
-	      if(MAGNETIC_FIELDS_ENABLED){
-		pfield->b.x1f(k,j,i) /= (double)npoints(k,j,i) ;
-		pfield->b.x2f(k,j,i) /= (double)npoints(k,j,i) ;
-		pfield->b.x3f(k,j,i) /= (double)npoints(k,j,i) ;
-	      }
-	      */
-	       //!!! temporary turned off the averaging for the MFs 
-	      // ensuring there is no underpressure
-	      // phydro->u(IEN, k, j, i) = std::max(phydro->u(IEN, k, j, i), pgas / (gamma-1.) + rhogas * (SQR(addvx)+SQR(addvy)+SQR(addvz))/2.);
-	      //				       + (SQR(pfield->b.x1f(k,j,i))+SQR(pfield->b.x2f(k,j,i))+SQR(pfield->b.x3f(k,j,i)))/2.);
-	      
-	      Real scalefactor=1., dd=0.;
-	      
-	      if (massboost>1.0){// making the star 'massboost' times heavier (no effect on the dynamics, as we ignore self-gravity)
-		// valid only if NSCALARS > 0
-		pscalars->s(0,k,j,i) *= massboost; // tracer cons
-		scalefactor = 1.+(massboost-1.) * pscalars->r(0,k,j,i); // boosting only stellar material
-		// pscalars->s(0,k,j,i) *= scalefactor;
-		//		      pscalars->r(n,k,j,i) = pscalars->s(n,k,j,i) / phydro->u(IDN, k, j, i);
-		phydro->u(IDN, k, j, i) *= scalefactor ;
-		phydro->u(IEN, k, j, i) *= scalefactor ;
-		//		if (ifcomoving){
-		phydro->u(IM1, k, j, i) *= scalefactor ;
-		phydro->u(IM2, k, j, i) *= scalefactor ;
-		phydro->u(IM3, k, j, i) *= scalefactor ;
-		  //}
-		// pscalars->r(0,k,j,i) = pscalars->s(0,k,j,i) / phydro->u(IDN, k, j, i);
-		
-		/*
-		if(MAGNETIC_FIELDS_ENABLED){
-		  // variable scale factor would lead to divB \neq 0
-		  // as most magnetized regions tend to have tracer ~ 1, the magnetization is set to sqrt(massboost everywhere)
-		  // turned out for now
-		  scalefactor = massboost;
-		  pfield->b.x1f(k,j,i) *= std::sqrt(scalefactor);
-		  pfield->b.x2f(k,j,i) *= std::sqrt(scalefactor);
-		  pfield->b.x3f(k,j,i) *= std::sqrt(scalefactor);
-		 }
-		*/
-			
-	      }
-	      // ensuring there is no underpressure      
-	      //              phydro->u(IEN, k, j, i) = std::max(phydro->u(IEN, k, j, i), pgas / (gamma-1.) + rhogas * (SQR(addvx)+SQR(addvy)+SQR(addvz))/2.);
-
-	      // if the density is locally smaller than bgdrho
-	      if (phydro->u(IDN, k, j, i) < rhogas){
-		dd = rhogas-phydro->u(IDN, k, j, i);
-		phydro->u(IDN, k, j, i) = rhogas;
-		//		if (ifcomoving){
-		phydro->u(IM1, k, j, i) += dd * (addvx+bgdvx);
-		phydro->u(IM2, k, j, i) += dd * (addvy+bgdvy);
-		phydro->u(IM3, k, j, i) += dd * (addvz+bgdvz);
-		phydro->u(IEN, k, j, i) += dd * (bgdp/bgdrho / (gamma-1.) + (SQR(addvx+bgdvx)+SQR(addvy+bgdvy)+SQR(addvz+bgdvz))/2.) ;
-		//}
-		//else{
-		//phydro->u(IEN, k, j, i) += dd * bgdp/bgdrho / (gamma-1.);
-		//	}
-		pscalars->s(0,k,j,i) = pscalars->r(0,k,j,i) = 0.;
-	      }
-	      pscalars->s(0,k,j,i) = std::min(pscalars->s(0,k,j,i), phydro->u(IDN, k, j, i));
-	      pscalars->r(0,k,j,i) = std::min(std::max(pscalars->s(0,k,j,i) / phydro->u(IDN, k, j, i), 0.), 1.);
-	      // ensuring there is no underpressure                                                                                                                                     
-	      if (ifcomoving){// if the ambient medium is 
-		phydro->u(IEN, k, j, i) = std::max(phydro->u(IEN, k, j, i), pgas / (gamma-1.) + rhogas * (SQR(addvx+bgdvx)+SQR(addvy+bgdvy)+SQR(addvz+bgdvz))/2.);
-	      } else{
-		phydro->u(IEN, k, j, i) = std::max(phydro->u(IEN, k, j, i), pgas / (gamma-1.)) + rhogas * (SQR(bgdvx)+SQR(bgdvy)+SQR(bgdvz))/2.;
-	      }
-	    }
-	    else{
-	      if (ifcomoving){
-		phydro->u(IDN, k, j, i) = bgdrho;
-		phydro->u(IM1, k, j, i) = bgdrho * (addvx+bgdvx);
-		phydro->u(IM2, k, j, i) = bgdrho * (addvy+bgdvy);
-		phydro->u(IM3, k, j, i) = bgdrho * (addvz+bgdvz);
-	      }
-	      else{
-		// within the sphere with R = half diagonal of the initial cube, the ambient matter is comoving with the star
-		entrainfactor = std::exp(std::min(1.-SQR(r2star/rbox)/3.,0.)*0.5);
-		phydro->u(IDN, k, j, i) = rhogas ; // bgdrho  * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), 0.1));
-		phydro->u(IM1, k, j, i) = rhogas * (addvx+bgdvx) * entrainfactor;
-		phydro->u(IM2, k, j, i) = rhogas * (addvy+bgdvy) * entrainfactor;
-		phydro->u(IM3, k, j, i) = rhogas * (addvz+bgdvz) * entrainfactor;
-	      }
-	      /*
-	      if(MAGNETIC_FIELDS_ENABLED){
-		pfield->b.x1f(k,j,i) = 0.;
-		pfield->b.x2f(k,j,i) = 0.;
-		pfield->b.x3f(k,j,i) = 0.;
-	      }
-	      */
-	      if(NSCALARS>0){
-		
-		for (int n=0; n<NSCALARS;++n)pscalars->r(n,k,j,i) =  pscalars->s(n,k,j,i) = 0.;
-	      }
-	      //                    if (NON_BAROTROPIC_EOS) {
-	      if(ifcomoving){
-		phydro->u(IEN, k, j, i) = pgas / (gamma-1.) + rhogas * (SQR(addvx)+SQR(addvy)+SQR(addvz))/2.;
-	      }
-	      else{
-                entrainfactor = std::exp(std::min(1.-SQR(r2star/rbox)/3.,0.)*0.5);
-		phydro->u(IEN, k, j, i) = pgas / (gamma-1.) + rhogas * (SQR(addvx)+SQR(addvy)+SQR(addvz))/2. * SQR(entrainfactor);  // * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), 0.1));
-	      }
-
-	    }
-	    if(std::isnan(phydro->u(IEN, k, j, i))){
-	      std::cout << "!!! nan U, coords = " << k << ", " << j << ", " << i << "\n npoints = " << npoints(k,j,i) << "\n";
-	      // getchar();
-	    }
-	    if(phydro->u(IEN, k, j, i) < pgas / (gamma-1.)){
-	      std::cout << "!!! U = "<< phydro->u(IEN, k, j, i)<<", coords = " << k << ", " << j << ", " << i << "\n npoints = " << npoints(k,j,i) << "\n";
-              //getchar();
 	    }
 	    /*
+	      if(MAGNETIC_FIELDS_ENABLED){
+	      pfield->b.x1f(k,j,i) /= (double)npoints(k,j,i) ;
+	      pfield->b.x2f(k,j,i) /= (double)npoints(k,j,i) ;
+	      pfield->b.x3f(k,j,i) /= (double)npoints(k,j,i) ;
+	      }
+	    */
+	    //!!! temporary turned off the averaging for the MFs 
+	    // ensuring there is no underpressure
+	    // phydro->u(IEN, k, j, i) = std::max(phydro->u(IEN, k, j, i), pgas / (gamma-1.) + rhogas * (SQR(addvx)+SQR(addvy)+SQR(addvz))/2.);
+	    //				       + (SQR(pfield->b.x1f(k,j,i))+SQR(pfield->b.x2f(k,j,i))+SQR(pfield->b.x3f(k,j,i)))/2.);
+	    
+	    Real scalefactor=1., dd=0.;
+	    
+	    if (massboost>1.0){// making the star 'massboost' times heavier (no effect on the dynamics, as we ignore self-gravity)
+	      // valid only if NSCALARS > 0
+	      pscalars->s(0,k,j,i) *= massboost; // tracer cons
+	      scalefactor = 1.+(massboost-1.) * pscalars->r(0,k,j,i); // boosting only stellar material
+	      
+	      phydro->u(IDN, k, j, i) *= scalefactor ;
+	      phydro->u(IEN, k, j, i) *= scalefactor ;
+	      
+	      phydro->u(IM1, k, j, i) *= scalefactor ;
+	      phydro->u(IM2, k, j, i) *= scalefactor ;
+	      phydro->u(IM3, k, j, i) *= scalefactor ;		
+	    }
+	    
+	    // if the density is locally smaller than bgdrho
+	    if (phydro->u(IDN, k, j, i) < rhogas){
+	      dd = rhogas-phydro->u(IDN, k, j, i);
+	      phydro->u(IDN, k, j, i) = rhogas;
+	      phydro->u(IM1, k, j, i) += dd * (addvx+bgdvx);
+	      phydro->u(IM2, k, j, i) += dd * (addvy+bgdvy);
+	      phydro->u(IM3, k, j, i) += dd * (addvz+bgdvz);
+	      phydro->u(IEN, k, j, i) += dd * (bgdp/bgdrho / (gamma-1.) + (SQR(addvx+bgdvx)+SQR(addvy+bgdvy)+SQR(addvz+bgdvz))/2.) ;
+	      pscalars->s(0,k,j,i) = pscalars->r(0,k,j,i) = 0.;
+	    }
+	    pscalars->s(0,k,j,i) = std::min(pscalars->s(0,k,j,i), phydro->u(IDN, k, j, i));
+	    pscalars->r(0,k,j,i) = std::min(std::max(pscalars->s(0,k,j,i) / phydro->u(IDN, k, j, i), 0.), 1.);
+	    // ensuring there is no underpressure                                                                                                                                     
+	    // 	      if (ifcomoving){// if the ambient medium is 
+	    phydro->u(IEN, k, j, i) = std::max(phydro->u(IEN, k, j, i), pgas / (gamma-1.) + rhogas * (SQR(addvx+bgdvx)+SQR(addvy+bgdvy)+SQR(addvz+bgdvz))/2.);
+	    //	      } else{
+	    //phydro->u(IEN, k, j, i) = std::max(phydro->u(IEN, k, j, i), pgas / (gamma-1.)) + rhogas * (SQR(bgdvx)+SQR(bgdvy)+SQR(bgdvz))/2.;
+	    // }
+	  }
+	  else{
+	    //	      if (ifcomoving){
+	    phydro->u(IDN, k, j, i) = bgdrho;
+	    //		phydro->u(IM1, k, j, i) = bgdrho * (addvx+bgdvx);
+	    // phydro->u(IM2, k, j, i) = bgdrho * (addvy+bgdvy);
+	    // phydro->u(IM3, k, j, i) = bgdrho * (addvz+bgdvz);
+	    //}
+	    //else{
+	    // within the sphere with R = half diagonal of the initial cube, the ambient matter is comoving with the star
+	    entrainfactor = std::exp(std::min(1.-SQR(r2star/rbox)/3.,0.)*0.5);
+	    phydro->u(IDN, k, j, i) = rhogas ; // bgdrho  * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), 0.1));
+	    phydro->u(IM1, k, j, i) = rhogas * (addvx+bgdvx) * entrainfactor;
+	    phydro->u(IM2, k, j, i) = rhogas * (addvy+bgdvy) * entrainfactor;
+	    phydro->u(IM3, k, j, i) = rhogas * (addvz+bgdvz) * entrainfactor;
+	  }
+	  /*
+	    if(MAGNETIC_FIELDS_ENABLED){
+	    pfield->b.x1f(k,j,i) = 0.;
+	    pfield->b.x2f(k,j,i) = 0.;
+	    pfield->b.x3f(k,j,i) = 0.;
+	    }
+	  */
+	  if(NSCALARS>0){
+	    
+	    for (int n=0; n<NSCALARS;++n)pscalars->r(n,k,j,i) =  pscalars->s(n,k,j,i) = 0.;
+	  }
+	  //                    if (NON_BAROTROPIC_EOS) {
+	  //  if(ifcomoving){
+	  //	phydro->u(IEN, k, j, i) = pgas / (gamma-1.) + rhogas * (SQR(addvx)+SQR(addvy)+SQR(addvz))/2.;
+	  //}
+	  //else{
+	  entrainfactor = std::exp(std::min(1.-SQR(r2star/rbox)/3.,0.)*0.5);
+	  phydro->u(IEN, k, j, i) = pgas / (gamma-1.) + rhogas * (SQR(addvx)+SQR(addvy)+SQR(addvz))/2. * SQR(entrainfactor);  // * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), 0.1));
+	  // }
+	  
+	  if(std::isnan(phydro->u(IEN, k, j, i))){
+	    std::cout << "!!! nan U, coords = " << k << ", " << j << ", " << i << "\n npoints = " << npoints(k,j,i) << "\n";
+	    // getchar();
+	  }
+	  if(phydro->u(IEN, k, j, i) < pgas / (gamma-1.)){
+	    std::cout << "!!! U = "<< phydro->u(IEN, k, j, i)<<", coords = " << k << ", " << j << ", " << i << "\n npoints = " << npoints(k,j,i) << "\n";
+	    //getchar();
+	  }
+	  /*
 	    phydro->w(IPR, k,j,i) = std::max(phydro->u(IEN, k, j, i) - 0.5*(SQR(phydro->u(IM1, k, j, i)) + SQR(phydro->u(IM1, 2, j, i)) + SQR(phydro->u(IM3, k, j, i)))/phydro->u(IDN, k,j,i), pgas);
 	    phydro->w(IDN, k,j,i) = phydro->u(IDN, k,j,i) ;
 	    phydro->w(IM1, k,j,i) = phydro->u(IM1, k,j,i)/phydro->u(IDN, k,j,i) ;
             phydro->w(IM2, k,j,i) = phydro->u(IM2, k,j,i)/phydro->u(IDN, k,j,i) ;
             phydro->w(IM3, k,j,i) = phydro->u(IM3, k,j,i)/phydro->u(IDN, k,j,i) ;
-	    */
-	  }
-        }
+	  */
+	}
+      }
     }
     
     std::cout << "gid = " << gid << " finished; maximal points = " << maxnpoints << "\n";
@@ -1145,7 +1061,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 	      Real bgdp_local = bgdp;
 	      if (ifXYZ) bgdp_local = bgdp * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), -3.));
 	      phydro->w1(IPR, k,j,i) = phydro->w(IPR, k,j,i) = bgdp_local; //, phydro->w(IPR, k,j,i)); //  - (SQR(pfield->bcc(IB3,k,j,i))+SQR(pfield->bcc(IB2, k,j,i))+SQR(pfield->bcc(IB1, k,j,i)))/2.;
-	      // std::max(phydro->w(IPR, k,j,i), bgdp)
+	      // pressure changes smooth within the star (or stellar debris cloud), it remains an entropy perturbation
 	    }
 	  }
 	}
@@ -1182,12 +1098,10 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 	      }
 	      //	if (ifXYZ)  bgdp_local = bgdp * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), -3.));
 	      // if (phydro->w(IPR, k,j,i) < 1e-2)std::cout << "P ("<< k << ", " << j << ", " << i << ") = " << phydro->w(IPR, k,j,i) << "; (U =  " << phydro->u(IEN, k,j, i)<<  " (internal)  + " << (SQR(pfield->bcc(IB1, k,j,i)) + SQR(pfield->bcc(IB2, k,j,i)) + SQR(pfield->bcc(IB3, k,j,i)))/2. << " (magnetic) +" << (SQR(phydro->u(IM1, k,j,i)) + SQR(phydro->u(IM2, k,j,i)) + SQR(phydro->u(IM3, k,j,i)) ) /2. << " (kinetic)\n"; 
-
 	      	     
- //	      getchar();
+	      //	      getchar();
 	      phydro->w1(IPR, k,j,i) =  phydro->w(IPR, k,j,i) = std::max(bgdp_local, phydro->w(IPR, k,j,i)); //  - (SQR(pfield->bcc(IB3,k,j,i))+SQR(pfield->bcc(IB2, k,j,i))+SQR(pfield->bcc(IB1, k,j,i)))/2.;
-	      
-	      // std::max(phydro->w(IPR, k,j,i), bgdp)                                                                                                                          
+	      // maximal pressure (star or background)	      
 	    }
 	  }
 	}
@@ -1292,10 +1206,9 @@ void BHgrav(MeshBlock *pmb, const Real time, const Real dt,
         Real g3 = fadd * (z-zBH)/reff -BH0z; // (BHphifun(x,y,pmb->pcoord->x3v(k+1))-BHphifun(x, y, pmb->pcoord->x3v(k-1)))/2.;                               
 	Real s;             
 	if (ifstitcher){
-
 	  // s = stitcher(den/dencut, 0.1);
 	  s = stitcher(prim_scalar(0,k,j,i)/0.01, 0.1);
-	// }                                                                                                                 
+	  // }
 	  g1 *= s; g2 *= s; g3 *= s;
 	}
 
@@ -1332,310 +1245,6 @@ void BHgrav(MeshBlock *pmb, const Real time, const Real dt,
 
 }
 
-
-/*
-void Bclean(MeshBlock *pmb, const Real time, const Real dt,
-	    const AthenaArray<Real> &prim, const AthenaArray<Real> &prim_scalar,
-	    const AthenaArray<Real> &bcc, AthenaArray<Real> &cons,
-	    AthenaArray<Real> &cons_scalar){
-  // diffusing the field where tracer is small
-
-  Real rcutoff = 0.01;
-
-  Real dx = pmb->pcoord->dx1v(0);
-  Real dy = dx, dz = dx;
-
-  if (ifBcleandecay){
-    for (int k=pmb->ks; k<pmb->ke; ++k) {
-      for (int j=pmb->js-1; j<pmb->je; ++j) {
-	for (int i=pmb->is; i<pmb->ie; ++i) {
-	  pmb->pfield->b.x1f(k,j,i) *= (1.-Bdecayfactor);
-	  pmb->pfield->b.x2f(k,j,i) *= (1.-Bdecayfactor);
-	  pmb->pfield->b.x3f(k,j,i) *= (1.-Bdecayfactor);
-	}
-      }
-    }
-  }
-
-  for (int k=pmb->ks-1; k<pmb->ke+1; ++k) {
-    for (int j=pmb->js-1; j<pmb->je+1; ++j) {
-      for (int i=pmb->is-1; i<pmb->ie+1; ++i) {
-	Real r0 = prim_scalar(0,k,j,i);
-	if(r0<rcutoff){
-	  Real Dcoeff = 0.5 * (1. - std::exp(-SQR(r0/rcutoff-1.)/2.))/(1. - std::exp(-0.5)); 
-	  pmb->pfield->b.x1f(k,j,i) = pmb->pfield->b.x1f(k,j,i) + Dcoeff * (pmb->pfield->b.x1f(k+1,j,i)+pmb->pfield->b.x1f(k-1,j,i)+pmb->pfield->b.x1f(k,j+1,i)+pmb->pfield->b.x1f(k,j-1,i)+pmb->pfield->b.x1f(k,j,i+1)+pmb->pfield->b.x1f(k,j,i-1)-6.*pmb->pfield->b.x1f(k,j,i));
-	  pmb->pfield->b.x2f(k,j,i) = pmb->pfield->b.x2f(k,j,i)+ Dcoeff * (pmb->pfield->b.x2f(k+1,j,i)+pmb->pfield->b.x2f(k-1,j,i)+pmb->pfield->b.x2f(k,j+1,i)+pmb->pfield->b.x2f(k,j-1,i)+pmb->pfield->b.x2f(k,j,i+1)+pmb->pfield->b.x2f(k,j,i-1)-6.*pmb->pfield->b.x2f(k,j,i));
-	  pmb->pfield->b.x3f(k,j,i) = pmb->pfield->b.x3f(k,j,i)+ Dcoeff * (pmb->pfield->b.x3f(k+1,j,i)+pmb->pfield->b.x3f(k-1,j,i)+pmb->pfield->b.x3f(k,j+1,i)+pmb->pfield->b.x3f(k,j-1,i)+pmb->pfield->b.x3f(k,j,i+1)+pmb->pfield->b.x3f(k,j,i-1)-6.*pmb->pfield->b.x3f(k,j,i));
-	}
-      }
-    }
-  }
-}
-
-void Bdiff_scalar(MeshBlock *pmb, const Real time, const Real dt,
-	       const AthenaArray<Real> &prim, const AthenaArray<Real> &prim_scalar,
-	       const AthenaArray<Real> &bcc, AthenaArray<Real> &cons,
-	       AthenaArray<Real> &cons_scalar){
-
-  AthenaArray<Real> divB, phi;
-  divB.NewAthenaArray(pmb->ncells3, pmb->ncells2, pmb->ncells1);
-  phi.NewAthenaArray(pmb->ncells3, pmb->ncells2, pmb->ncells1);
-
-  Real divBmax = 0., divBmaxnew = 0., dx = pmb->pcoord->dx1v(0);
-  Real dy = dx, dz = dx;
-
-  for (int k=pmb->ks-1; k<pmb->ke+1; ++k) {
-    // Real dz = pmb->pcoord->dx3v(k);                                                                                                                                                  
-    for (int j=pmb->js-1; j<pmb->je+1; ++j) {
-      // Real dy = pmb->pcoord->dx2v(j);                                                                                                                                                
-      for (int i=pmb->is-1; i<pmb->ie+1; ++i) {
-        // dx = pmb->pcoord->dx1v(i);                                                                                                                                                   
-        divB(k,j,i) = (pmb->pfield->b.x3f(k+1,j,i)-pmb->pfield->b.x3f(k,j,i))/dz + (pmb->pfield->b.x2f(k,j+1,i)-pmb->pfield->b.x2f(k,j,i))/dy + (pmb->pfield->b.x1f(k,j,i+1)-pmb->pfield->b.x1f(k,j,i))/dx ;
-	phi(k,j,i) = 0.;
-	divBmax = std::max(divBmax, std::abs(divB(k,j,i)));
-      }
-    }
-  }
-
-  int niters = 0;
-  Real diva = 1.0, omega = 1.0;
-
-  while((diva > divatol)&&(niters<10000)){
-    diva = 0.; niters++ ;
-    // even i+j+k                                                                                                                                                                    
-    for (int k=pmb->ks-1; k<pmb->ke; ++k) {
-      for (int j=pmb->js-1; j<pmb->je; ++j) {
-	for (int i=pmb->is-1; i<pmb->ie; ++i) {
-	  if((i+j+k)%2 == 0){
-	    Real phi0 = phi(k,j,i);
-	    Real dphi = phi(k+1,j,i) + phi(k-1,j,i) + phi(k,j+1,i) + phi(k,j-1,i) + phi(k,j,i+1) + phi(k,j,i-1) - divB(k,j,i) * SQR(dx);
-	    phi(k,j,i) = ((1.-omega) * phi(k,j,i) + omega * dphi)/6.;
-	    diva = std::max(diva, std::abs(dphi));
-
-	  }
-	}
-      }
-    }
-    // odd i+j+k
-    for (int k=pmb->ks; k<pmb->ke; ++k) {
-      for (int j=pmb->js; j<pmb->je; ++j) {
-	for (int i=pmb->is; i<pmb->ie; ++i) {
-	  if((i+j+k)%2 == 1){
-	      Real phi0 = phi(k,j,i);
-	      Real dphi = phi(k+1,j,i) + phi(k-1,j,i) + phi(k,j+1,i) + phi(k,j-1,i) + phi(k,j,i+1) + phi(k,j,i-1) - divB(k,j,i)*SQR(dx);
-	      phi(k,j,i) = ((1.-omega) * phi(k,j,i) + omega * dphi)/6.;
-	      diva = std::max(diva, std::abs(dphi));
-	  }
-	}
-      } 
-    }
-  }
-
-  Real box = bomega/dx ;
-
-  for (int k=pmb->ks; k<=pmb->ke; k++) {
-    for (int j=pmb->js; j<=pmb->je; j++) {
-      for (int i=pmb->is; i<=pmb->ie+1; i++) {
-	pmb->pfield->b.x1f(k,j,i) = pmb->pfield->b.x1f(k,j,i) - box * (phi(k,j,i)-phi(k,j,i-1));
-	  // (1.-bomega) * pmb->pfield->b.x1f(k,j,i) + ((az(k,j+1,i) - az(k,j,i)) - (ay(k+1,j,i) - ay(k,j,i)))/dx * bomega ;
-      }
-    }
-  }
-  for (int k=pmb->ks; k<=pmb->ke; k++) {
-    for (int j=pmb->js; j<=pmb->je+1; j++) {
-      for (int i=pmb->is; i<=pmb->ie; i++) {
-	pmb->pfield->b.x2f(k,j,i) = pmb->pfield->b.x2f(k,j,i) - box * (phi(k,j,i)-phi(k,j-1,i)); 
-      }
-    }
-  }
-  for (int k=pmb->ks; k<=pmb->ke+1; k++) {
-    for (int j=pmb->js; j<=pmb->je; j++) {
-      for (int i=pmb->is; i<=pmb->ie; i++) {
-	pmb->pfield->b.x3f(k,j,i) = pmb->pfield->b.x3f(k,j,i) - box * (phi(k,j,i)-phi(k-1,j,i));
-      }
-    }
-  }
-
-  for (int k=pmb->ks-1; k<=pmb->ke+1; ++k) {
-    for (int j=pmb->js-1; j<=pmb->je+1; ++j) {
-      for (int i=pmb->is-1; i<=pmb->ie+1; ++i) {
-	divBmaxnew = std::max(divBmaxnew, std::abs((pmb->pfield->b.x3f(k+1,j,i)-pmb->pfield->b.x3f(k,j,i))/dz + (pmb->pfield->b.x2f(k,j+1,i)-pmb->pfield->b.x2f(k,j,i))/dy + (pmb->pfield->b.x1f(k,j,i+1)-pmb->pfield->b.x1f(k,j,i))/dx));
-      }
-    }
-  }
-
-  if ((niters > 1000)&&(divBmax > 1e-5))std::cout << "time = "<< time << ": before cleaning | divB | <= " << divBmax << "; after cleaning | divB | <= " << divBmaxnew << "; " << niters << " iterations ; diva = "<< diva << "\n";
-
-}
-
-void Bdiff_vec(MeshBlock *pmb, const Real time, const Real dt,
-            const AthenaArray<Real> &prim, const AthenaArray<Real> &prim_scalar,
-            const AthenaArray<Real> &bcc, AthenaArray<Real> &cons,
-            AthenaArray<Real> &cons_scalar){
-
-  //  if ((bomega > 0.) && (time <= tclean)){
-    // std::cout << "gid = " << Globals::my_rank << "\n";
-    AthenaArray<Real> ax, ay, az, curlBx, curlBy, curlBz;
-    //    divB.NewAthenaArray(pmb->ncells3, pmb->ncells2, pmb->ncells1);
-    curlBx.NewAthenaArray(pmb->ncells3, pmb->ncells2, pmb->ncells1);
-    curlBy.NewAthenaArray(pmb->ncells3, pmb->ncells2, pmb->ncells1);
-    curlBz.NewAthenaArray(pmb->ncells3, pmb->ncells2, pmb->ncells1);
-
-    //   curlB.NewAthenaArray(3, pmb->ncells3, pmb->ncells2, pmb->ncells1);
-
-  Real divBmax = 0., maxj = 0.;
-  //   Real curlBx, curlBy, curlBz;
-
-  Real dx = pmb->pcoord->dx1v(0); // assuming the grid is square
-  // dx = 1.; // because the result should not depend on dx
-  Real dy = dx, dz = dx;
-
-  // calculating currents
-  for (int k=pmb->ks-1; k<=pmb->ke+1; ++k) {
-    // Real dz = pmb->pcoord->dx3v(k);
-    for (int j=pmb->js-1; j<=pmb->je+1; ++j) {
-      // Real dy = pmb->pcoord->dx2v(j);
-      for (int i=pmb->is-1; i<=pmb->ie+1; ++i) {
-        // dx = pmb->pcoord->dx1v(i);
-	Real divB = (pmb->pfield->b.x3f(k+1,j,i)-pmb->pfield->b.x3f(k,j,i))/dz + (pmb->pfield->b.x2f(k,j+1,i)-pmb->pfield->b.x2f(k,j,i))/dy + (pmb->pfield->b.x1f(k,j,i+1)-pmb->pfield->b.x1f(k,j,i))/dx ;
-	curlBx(k,j,i) = (pmb->pfield->b.x3f(k,j+1,i)-pmb->pfield->b.x3f(k,j,i))/dy-(pmb->pfield->b.x2f(k+1,j,i)-pmb->pfield->b.x2f(k,j,i))/dz;
-	curlBy(k,j,i) = (pmb->pfield->b.x1f(k+1,j,i)-pmb->pfield->b.x1f(k,j,i))/dz-(pmb->pfield->b.x3f(k,j,i+1)-pmb->pfield->b.x3f(k,j,i))/dx;
-	curlBz(k,j,i) = (pmb->pfield->b.x2f(k,j,i+1)-pmb->pfield->b.x2f(k,j,i))/dx-(pmb->pfield->b.x1f(k,j+1,i)-pmb->pfield->b.x1f(k,j,i))/dy;
-
-	maxj = std::max(maxj, std::sqrt(SQR(curlBx(k,j,i))+SQR(curlBy(k,j,i))+SQR(curlBz(k,j,i))));
-	// if(std::abs(divB(k,j,i)) > divBmax) divBmax = divB(k,j,i);
-	divBmax = std::max(std::abs(divB), divBmax);
-      }
-    }
-  }
-
-  // std::cout << "| divB | <= " << divBmax << "\n";
-  // std::cout << "| curlB | <= " << maxj << "\n";
-  // Real d = BdiffD * SQR(dx); // !!!temporary!!!
-  int niters = 0;
-
-  //  if ((divBmax > (divBmaxLimit * maxj))&&(divBmax > 1e-15)){
-
-    ax.NewAthenaArray(pmb->ncells3, pmb->ncells2, pmb->ncells1);
-    ay.NewAthenaArray(pmb->ncells3, pmb->ncells2, pmb->ncells1);
-    az.NewAthenaArray(pmb->ncells3, pmb->ncells2, pmb->ncells1);
-
-    Real diva = 1.0, omega = 1.0, dax, day, daz;
-    // omega = 1 is red/black Gauss-Seidel
-
-    for (int k=pmb->ks-1; k<=pmb->ke+1; ++k) {
-      for (int j=pmb->js-1; j<=pmb->je+1; ++j) {
-	for (int i=pmb->is-1; i<=pmb->ie+1; ++i) {
-	  ax(k,j,i) = ay(k,j,i) = az(k,j,i) =0.;
-	}
-      }
-    }    
-
-    while((diva > divatol)&&(niters<1000)){
-      diva = 0.; niters++ ;
-	// even i+j+k
-	for (int k=pmb->ks; k<=pmb->ke+1; ++k) {
-	  for (int j=pmb->js; j<=pmb->je+1; ++j) {
-	    for (int i=pmb->is; i<=pmb->ie+1; ++i) {
-	      if((i+j+k)%2 == 0){
-		Real ax0 = ax(k,j,i), ay0 = ay(k,j,i), az0 = az(k,j,i);
-		dax = ax(k+1,j,i) + ax(k-1,j,i) + ax(k,j+1,i) + ax(k,j-1,i) + ax(k,j,i+1) + ax(k,j,i-1) + curlBx(k,j,i)*SQR(dx);
-		day = ay(k+1,j,i) + ay(k-1,j,i) + ay(k,j+1,i) + ay(k,j-1,i) + ay(k,j,i+1) + ay(k,j,i-1) + curlBy(k,j,i)*SQR(dx);
-		daz = az(k+1,j,i) + az(k-1,j,i) + az(k,j+1,i) + az(k,j-1,i) + az(k,j,i+1) + az(k,j,i-1) + curlBz(k,j,i)*SQR(dx);
-		ax(k,j,i) = (1.-omega) * ax(k,j,i) + dax * omega / 6.;
-		ay(k,j,i) = (1.-omega) * ay(k,j,i) + day * omega / 6.; 
-		az(k,j,i) = (1.-omega) * az(k,j,i) + daz * omega / 6.; 
-		if ((k > pmb->ks)&&(k<pmb->ke)&&(j>pmb->js)&&(j<pmb->je)&&(i>pmb->is)&&(i<pmb->ie))diva = std::max(diva, SQR(ax(k,j,i)-ax0)+SQR(ay(k,j,i)-ay0)+SQR(az(k,j,i)-az0));
-
-		if((std::abs(dax)+std::abs(day)+std::abs(daz))>100.0){
-		  std::cout << "Nan dA: i = " << i << "("<< pmb->ncells1 << "); j = " << j << "("<< pmb->ncells2 << ") ; k = " << k<< "("<< pmb->ncells3 << ")\n";
-		  std::cout << "Nan dA = " << dax << "; " << day << "; " << daz << "\n";
-		}
-	      }	      
-// std::abs(ax(k+1,j,i)-ax(k-1,j,i)+ ax(k,j+1,i)-ax(k,j-1,i)+ax(k,j,i+1)-ax(k,j,i-1)));
-	    }
-	  }
-	}
-	// odd i+j+k
-	
-        for (int k=pmb->ks; k<=pmb->ke+1; ++k) {
-          for (int j=pmb->js; j<=pmb->je+1; ++j) {
-            for (int i=pmb->is; i<=pmb->ie+1; ++i) {
-              if((i+j+k)%2 == 1){
-                Real ax0 = ax(k,j,i), ay0 = ay(k,j,i), az0 = az(k,j,i);
-		dax = ax(k+1,j,i) + ax(k-1,j,i) + ax(k,j+1,i) + ax(k,j-1,i) + ax(k,j,i+1) + ax(k,j,i-1) + curlBx(k,j,i)*SQR(dx);
-		day = ay(k+1,j,i) + ay(k-1,j,i) + ay(k,j+1,i) + ay(k,j-1,i) + ay(k,j,i+1) + ay(k,j,i-1) + curlBy(k,j,i)*SQR(dx);
-		daz = az(k+1,j,i) + az(k-1,j,i) + az(k,j+1,i) + az(k,j-1,i) + az(k,j,i+1) + az(k,j,i-1) + curlBz(k,j,i)*SQR(dx);
-		ax(k,j,i) = (1.-omega) * ax(k,j,i) + dax * omega / 6.;
-		ay(k,j,i) = (1.-omega) * ay(k,j,i) + day * omega / 6.;
-		az(k,j,i) = (1.-omega) * az(k,j,i) + daz * omega / 6.;
-		if ((k > pmb->ks)&&(k<pmb->ke)&&(j>pmb->js)&&(j<pmb->je)&&(i>pmb->is)&&(i<pmb->ie))diva = std::max(diva, SQR(ax(k,j,i)-ax0)+SQR(ay(k,j,i)-ay0)+SQR(az(k,j,i)-az0));
-	      
-		if((std::abs(dax)+std::abs(day)+std::abs(daz))>100.0){
-		  std::cout << "Nan dA: i = " << i << "("<< pmb->ncells1 << "); j = " << j << "("<< pmb->ncells2 << ") ; k = " << k<< "("<< pmb->ncells3 << ")\n";
-		  std::cout << "Nan dA = " << dax << "; " << day << "; " << daz<< "\n";
-		}
-	      }
-              // std::abs(ax(k+1,j,i)-ax(k-1,j,i)+ ax(k,j+1,i)-ax(k,j-1,i)+ax(k,j,i+1)-ax(k,j,i-1)));                                                                     
-            }
-          }
-        }
-	
-	//	std::cout << "diva = " << diva << "\n";
-    }
-
-      // B = curl A
-      for (int k=pmb->ks; k<=pmb->ke; k++) {
-	for (int j=pmb->js; j<=pmb->je; j++) {
-	  for (int i=pmb->is; i<=pmb->ie+1; i++) {
-	    pmb->pfield->b.x1f(k,j,i) = (1.-bomega) * pmb->pfield->b.x1f(k,j,i) + ((az(k,j+1,i) - az(k,j,i)) - (ay(k+1,j,i) - ay(k,j,i)))/dx * bomega ;
-	  }
-	}
-      }
-      for (int k=pmb->ks; k<=pmb->ke; k++) {
-	for (int j=pmb->js; j<=pmb->je+1; j++) {
-	  for (int i=pmb->is; i<=pmb->ie; i++) {
-	    pmb->pfield->b.x2f(k,j,i) =  (1.-bomega) * pmb->pfield->b.x2f(k,j,i) + ((ax(k+1,j,i) - ax(k,j,i)) - (az(k,j,i+1) - az(k,j,i)))/dx * bomega;
-	  }
-	}
-      }
-      for (int k=pmb->ks; k<=pmb->ke+1; k++) {
-	for (int j=pmb->js; j<=pmb->je; j++) {
-	  for (int i=pmb->is; i<=pmb->ie; i++) {
-	    pmb->pfield->b.x3f(k,j,i) =  (1.-bomega) * pmb->pfield->b.x3f(k,j,i) + ((ay(k,j,i+1) - ay(k,j,i)) - (ax(k,j+1,i) - ax(k,j,i)))/dx * bomega;
-	  }
-	}
-      }
-
-      Real divBmaxnew = 0., maxjnew = 0.;
-      for (int k=pmb->ks; k<=pmb->ke; ++k) {
-	for (int j=pmb->js; j<=pmb->je; ++j) {
-	  for (int i=pmb->is; i<=pmb->ie; ++i) {
-	    Real divBtmp = (pmb->pfield->b.x3f(k+1,j,i)-pmb->pfield->b.x3f(k,j,i))/dz + (pmb->pfield->b.x2f(k,j+1,i)-pmb->pfield->b.x2f(k,j,i))/dy + (pmb->pfield->b.x1f(k,j,i+1)-pmb->pfield->b.x1f(k,j,i))/dx ;
-	    divBmaxnew = std::max(std::abs(divBtmp), divBmaxnew);
-
-	    curlBx(k,j,i) = (pmb->pfield->b.x3f(k,j+1,i)-pmb->pfield->b.x3f(k,j,i))/dy-(pmb->pfield->b.x2f(k+1,j,i)-pmb->pfield->b.x2f(k,j,i))/dz;
-	    curlBy(k,j,i) = (pmb->pfield->b.x1f(k+1,j,i)-pmb->pfield->b.x1f(k,j,i))/dz-(pmb->pfield->b.x3f(k,j,i+1)-pmb->pfield->b.x3f(k,j,i))/dx;
-	    curlBz(k,j,i) = (pmb->pfield->b.x2f(k,j,i+1)-pmb->pfield->b.x2f(k,j,i))/dx-(pmb->pfield->b.x1f(k,j+1,i)-pmb->pfield->b.x1f(k,j,i))/dy;
-
-	    maxjnew = std::max(maxjnew, std::sqrt(SQR(curlBx(k,j,i))+SQR(curlBy(k,j,i))+SQR(curlBz(k,j,i))));
-	  }
-	}
-      }
-      if ((niters > 0)&&(divBmax > 1e-5))std::cout << "time = "<< time << ": before cleaning | divB | <= " << divBmax << "; after cleaning | divB | <= " << divBmaxnew << "; |curl B|  <= " << maxj <<  "; after cleaning |curl B| <= " << maxjnew << "; " << niters << " iterations \n";
-
-}
-
-Real MyTimeStep(MeshBlock *pmb){
-
-  if (bomega > 0.0){
-    return 1.0e-4; // temporary! How to make it depend on time?? 
-  }else{
-    return 1.0;
-  }
-    // 0.1 * tclean / bomega ; 
-}
-*/
 int RefinementCondition_Bonly(MeshBlock *pmb)
 {
     Real bsq, maxbsq = 0.;
