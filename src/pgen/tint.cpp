@@ -999,9 +999,9 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 	    // within the sphere with R = half diagonal of the initial cube, the ambient matter is comoving with the star
 	    entrainfactor = std::exp(std::min(1.-SQR(r2star/rbox)/3.,0.)*0.5);
 	    phydro->u(IDN, k, j, i) = rhogas ; // bgdrho  * std::exp(std::max(std::min(rvir/r-rvir/rstar, 3.), 0.1));
-	    phydro->u(IM1, k, j, i) = rhogas * (addvx+bgdvx) * entrainfactor;
-	    phydro->u(IM2, k, j, i) = rhogas * (addvy+bgdvy) * entrainfactor;
-	    phydro->u(IM3, k, j, i) = rhogas * (addvz+bgdvz) * entrainfactor;
+	    phydro->u(IM1, k, j, i) = rhogas * (addvx * entrainfactor +bgdvx ); // non-zero bgd velocities are needed for loop tests, where there is no star motion and BH gravity
+	    phydro->u(IM2, k, j, i) = rhogas * (addvy * entrainfactor +bgdvy );
+	    phydro->u(IM3, k, j, i) = rhogas * (addvz * entrainfactor +bgdvz );
 	  }
 	  /*
 	    if(MAGNETIC_FIELDS_ENABLED){

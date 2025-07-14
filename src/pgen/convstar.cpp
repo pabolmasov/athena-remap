@@ -3,8 +3,8 @@
 // Copyright(C) 2014 James M. Stone <jmstone@princeton.edu> and other code contributors
 // Licensed under the 3-clause BSD License, see LICENSE file for details
 //========================================================================================
-//! \file binary_gravity.cpp
-//  \brief Problem generator to test Multigrid Poisson solver with Multipole Expansion
+//! \file convstar.cpp
+//  \brief Problem generator for a self-gravitating star with an external black hole potential
 
 // C headers
 
@@ -83,6 +83,7 @@ void BHgrav(MeshBlock *pmb, const Real time, const Real dt,
               const AthenaArray<Real> &prim, const AthenaArray<Real> &prim_scalar,
               const AthenaArray<Real> &bcc, AthenaArray<Real> &cons,
               AthenaArray<Real> &cons_scalar);
+
 void BHcooling(MeshBlock *pmb, const Real time, const Real dt,
               const AthenaArray<Real> &prim, const AthenaArray<Real> &prim_scalar,
               const AthenaArray<Real> &bcc, AthenaArray<Real> &cons,
@@ -118,22 +119,23 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     four_pi_G = pin->GetReal("problem","four_pi_G");
     
     // boolean switches:
-    ifflat = pin->GetBoolean("problem", "ifflat");
-    iftab = pin->GetBoolean("problem", "iftab");
-    ifinclined = pin->GetBoolean("problem", "ifinclined");
+    ifflat = pin->GetBoolean("problem", "ifflat"); // constant density within the star
+    iftab = pin->GetBoolean("problem", "iftab"); // if we are reading a MESA table
+    ifinclined = pin->GetBoolean("problem", "ifinclined"); // inclined magnetic field
     
     if (iftab){
-        starmodel = pin->GetString("problem", "starmodel");
-        std::cout << "reading from " << starmodel << std::endl ;
+      starmodel = pin->GetString("problem", "starmodel");
+      std::cout << "reading from " << starmodel << std::endl ;
     }
-    rmin = pin->GetReal("problem","rmin");
-    rmax = pin->GetReal("problem","rmax");
-    mstar = pin->GetReal("problem","mstar");
-    rstar = pin->GetReal("problem","rstar");
-    rscale = pin->GetReal("problem","rscale");
+    
+    rmin = pin->GetReal("problem","rmin"); // radius of the non-magnetized core
+    rmax = pin->GetReal("problem","rmax"); // outer radius for the magnetic fields
+    mstar = pin->GetReal("problem","mstar"); // total integrated stellar mass
+    rstar = pin->GetReal("problem","rstar"); // star radius (for th tracer)
+    rscale = pin->GetReal("problem","rscale"); // star radius (scale factor alpha)
 
-    rcutoff = pin->GetReal("problem","rcutoff");
-    drcutoff = pin->GetReal("problem","drcutoff");
+    rcutoff = pin->GetReal("problem","rcutoff"); // cut-off radius for the infinite solution
+    drcutoff = pin->GetReal("problem","drcutoff"); // transition width for the cut-off
 
     if(ifinclined){
        Real inc = pin->GetOrAddReal("problem", "inc", 0.);
@@ -147,7 +149,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     rBH = pin->GetReal("problem", "rBH");
     BHgmax = addmass / SQR(rgrav); // GM/R^2 at R = 3GM/c^2
 
-    rper = pin->GetReal("problem","rper"); // pericenter distance
+    rper = pin->GetReal("problem","rper"); // pericenter distance for the parabolic orbit
     Mcoeff = std::sqrt(addmass / 2.) * std::pow(rper, -1.5);
     tper = pin->GetReal("problem","tper"); // time lag
     
@@ -204,11 +206,11 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     std::int64_t iseed = - 1 - gid;
 
     // density distribution in the star:
-     std::list<Real> instar_mass = {};
-     std::list<Real> instar_radius = {};
-     std::list<Real> instar_lrho = {};
-     std::list<Real> instar_lpress = {};
-
+    std::list<Real> instar_mass = {};
+    std::list<Real> instar_radius = {};
+    std::list<Real> instar_lrho = {};
+    std::list<Real> instar_lpress = {};
+    
     Real tmp_m, tmp_r, tmp_lrho, tmp_lpress, instar_rmax = 0., instar_mtot = 0.;
     
     if (iftab){
@@ -222,8 +224,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
             // std::cout << tmp_m << " "<< tmp_r << " " << tmp_lrho << " " << tmp_lpress << std::endl ;
             instar_mass.push_back(tmp_m);
             instar_radius.push_back(tmp_r);
-            instar_lrho.push_back(tmp_lrho); // -0.770848
-            instar_lpress.push_back(tmp_lpress/G); // -16.0512
+            instar_lrho.push_back(tmp_lrho); 
+            instar_lpress.push_back(tmp_lpress/G); 
             if (tmp_r > instar_rmax) instar_rmax = tmp_r;
             if (tmp_m > instar_mtot) instar_mtot = tmp_m;
         }
@@ -246,12 +248,13 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     if (iftab){
         instar_interpolate(instar_radius, instar_lrho, instar_lpress, instar_mass, rnorm, 0., &dencurrent, &pcurrent) ;
     }
+
+    // if(ifflat){ ???
+    //     dencurrent = 1. ;
+    //     pcurrent =  1.-SQR(rnorm/rscale) ; // flat star case
+    // }
     
-    if(ifflat){
-        dencurrent = 1. ;
-        pcurrent =  1.-SQR(rnorm/rscale) ; // flat star case
-    }
-    Real rcsnorm = std::sqrt(dencurrent * pcurrent) / fabs(rmax - rnorm) * fabs(rnorm - rmin);
+    Real rcsnorm = std::sqrt(dencurrent * pcurrent) / std::abs(rmax - rnorm) * std::abs(rnorm - rmin);
 
     Real dnorm = mstar * 3./4./PI * std::pow(rscale, -3.); // default values (for a flat star)
     
@@ -260,7 +263,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         dnorm = mstar / (4.0 * PI * std::sqrt(3.)) * std::pow(rscale, -3.0);
         pcurrent = std::pow(1.+SQR(rnorm/rscale)/3., -2.5);
     }
-    Real pnorm = four_pi_G * SQR(dnorm * rscale) / 6. ;
+    Real pnorm = four_pi_G * SQR(dnorm * rscale) / 6. ; // central pressure for rho = const
 
     if (iftab){
         dnorm = mstar * std::pow(rscale/instar_rmax, -3.);
@@ -487,8 +490,14 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     float cpu_time = (tend>tstart ? static_cast<Real>(tend-tstart) : 1.0) /
       static_cast<Real>(CLOCKS_PER_SEC);
 
-    std::cout << "IC time = " << cpu_time << std::endl;
-    std::cout << "starmass = " << starmass_empirical << std::endl;
+#ifdef MPI_PARALLEL   
+    MPI_Allreduce(MPI_IN_PLACE, &starmass_empirical, 1, MPI_ATHENA_REAL, MPI_SUM, MPI_COMM_WORLD);
+#endif
+    
+    if(Globals::my_rank == 0){
+      std::cout << "IC time = " << cpu_time << std::endl;
+      std::cout << "starmass = " << starmass_empirical << std::endl; 
+    }
     
     if(MAGNETIC_FIELDS_ENABLED){
       // initialize interface B
@@ -550,37 +559,38 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
 int RefinementCondition(MeshBlock *pmb)
 {
-    AthenaArray<Real> &w = pmb->phydro->w;
-    AthenaArray<Real> &R = pmb->pscalars->r; // scalar (=1 inside the star, =0 outside)
-    
-    Real maxR0 = 0.0, maxeps = 0.;
-    Real refden = 10. * bgdrho;
-    
-    for(int k=pmb->ks; k<=pmb->ke; k++) {
-      // Real  z = pmb->pcoord->x3v(k);
-      for(int j=pmb->js; j<=pmb->je; j++) {
-	//  Real y = pmb->pcoord->x2v(j);
-	for(int i=pmb->is; i<=pmb->ie; i++) {
-	  // Real x = pmb->pcoord->x1v(i), dx = pmb->pcoord->dx1v(i); // , y = pmb->pcoord->x2v(j), z = pmb->pcoord->x3v(k);
-	  //        Real xf = pmb->pcoord->x1f(i), yf = pmb->pcoord->x2f(j), zf = pmb->pcoord->x3f(k);
-	  // Real r1 = std::sqrt(SQR(x)+SQR(y)+SQR(z)); // distance to the star centre
-	  Real r = R(0, k, j, i);
-	  Real den = w(IDN,k,j,i);
-	  maxR0 = std::max(maxR0, R(0, k, j, i));
-	  if ((r>Rthresh) && (den>refden)){
-	    Real eps = std::abs(w(IDN,k,j,i+1)+w(IDN,k,j,i-1) - 2. * den) + std::abs(w(IDN,k,j+1,i)+w(IDN,k,j-1,i) - 2. * den) + std::abs(w(IDN,k+1,j,i)+w(IDN,k-1,j,i) - 2. * den);
-	      //std::sqrt(SQR(w(IDN,k,j,i+1)-w(IDN,k,j,i-1))
-	      //	    +SQR(w(IDN,k,j+1,i)-w(IDN,k,j-1,i))
-	      //	    +SQR(w(IDN,k+1,j,i)-w(IDN,k-1,j,i)))/(den+refden);
-	    maxeps = std::max(maxeps, eps / (den+refden));
-	  }
+  // no magnetic fields involved
+  AthenaArray<Real> &w = pmb->phydro->w;
+  AthenaArray<Real> &R = pmb->pscalars->r; // scalar (=1 inside the star, =0 outside)
+  
+  Real maxR0 = 0.0, maxeps = 0.;
+  Real refden = 10. * bgdrho;
+  
+  for(int k=pmb->ks; k<=pmb->ke; k++) {
+    // Real  z = pmb->pcoord->x3v(k);
+    for(int j=pmb->js; j<=pmb->je; j++) {
+      //  Real y = pmb->pcoord->x2v(j);
+      for(int i=pmb->is; i<=pmb->ie; i++) {
+	// Real x = pmb->pcoord->x1v(i), dx = pmb->pcoord->dx1v(i); // , y = pmb->pcoord->x2v(j), z = pmb->pcoord->x3v(k);
+	//        Real xf = pmb->pcoord->x1f(i), yf = pmb->pcoord->x2f(j), zf = pmb->pcoord->x3f(k);
+	// Real r1 = std::sqrt(SQR(x)+SQR(y)+SQR(z)); // distance to the star centre
+	Real r = R(0, k, j, i);
+	Real den = w(IDN,k,j,i);
+	maxR0 = std::max(maxR0, R(0, k, j, i));
+	if ((r>Rthresh) && (den>refden)){
+	  Real eps = std::abs(w(IDN,k,j,i+1)+w(IDN,k,j,i-1) - 2. * den) + std::abs(w(IDN,k,j+1,i)+w(IDN,k,j-1,i) - 2. * den) + std::abs(w(IDN,k+1,j,i)+w(IDN,k-1,j,i) - 2. * den);
+	  //std::sqrt(SQR(w(IDN,k,j,i+1)-w(IDN,k,j,i-1))
+	  //	    +SQR(w(IDN,k,j+1,i)-w(IDN,k,j-1,i))
+	  //	    +SQR(w(IDN,k+1,j,i)-w(IDN,k-1,j,i)))/(den+refden);
+	  maxeps = std::max(maxeps, eps / (den+refden));
 	}
       }
     }
-    
-    if (maxeps > thresh) return 1; // refinement
-    if ((maxR0 < (0.25*Rthresh))||(maxeps < (0.25*thresh))) return -1; // derefinement
-    
+  }
+  
+  if (maxeps > thresh) return 1; // refinement
+  if ((maxR0 < (0.25*Rthresh))||(maxeps < (0.25*thresh))) return -1; // derefinement
+  return 0.; 
 }
 
 Real BHgfun(Real x, Real y, Real z){
