@@ -184,7 +184,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     if (adaptive==true)
       EnrollUserRefinementCondition(RefinementCondition);
 
-    EnrollUserExplicitSourceFunction(BHgrav);
+    if (addmass > 0.0)EnrollUserExplicitSourceFunction(BHgrav);
     SetFourPiG(four_pi_G);
 }
 
@@ -303,189 +303,193 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     for (int k = ks; k <= ke; ++k) {
         for (int j = js; j <= je; ++j) {
             for (int i = is; i <= ie; ++i) {
-                Real z = pcoord->x3v(k)-zshift;
-                Real x = pcoord->x1v(i)-xshift, y = pcoord->x2v(j)-yshift;
-                Real xf = pcoord->x1f(i), yf = pcoord->x2f(j), zf = pcoord->x3f(k);
-                ax(k,j,i) = ay(k,j,i) = az(k,j,i) = 0.;
-                Real r1 = std::sqrt(x*x+y*y+z*z), r2f = std::sqrt(SQR(xf)+SQR(yf)+SQR(zf));;
-                Real cth1 = z / r1;
-                Real phi1 = std::atan2(y,x);
-                Real cth2f = zf / r2f, phi2f = std::atan2(yf,xf);
-                Real reff = std::sqrt(SQR(x-xBH)+SQR(y-yBH)+SQR(z-zBH));
-                Real PhiBH =  - rvirBH / (reff-2.*rgrav);
-                if (reff<(3.*rgrav)){
-		  PhiBH = (- 1.5 + SQR(reff/rgrav)/6.) * rvirBH / rgrav;
-                }
-                PhiBH += rvirBH / (reff0-2.*rgrav); // zeroing at the star centre
-                Real rhogas = bgdrho * std::exp(std::max(std::min(rvir * (-1./std::sqrt(rscale*rscale+drsq) + 1./std::sqrt(r1*r1+drsq)), std::log(dnorm/bgdrho)-2.),-30.));
-                Real dx = pcoord->dx1f(i), dy = pcoord->dx2f(j), dz = pcoord->dx3f(k);
-                Real dr = std::sqrt(SQR(dx)+SQR(dy)+SQR(dz)), dv = std::fabs(dx*dy*dz);
-                // Real dr = std::sqrt(SQR(pcoord->dx1f(i))+SQR(pcoord->dx2f(j))+SQR(pcoord->dx3f(k))), dv = std::fabs(pcoord->dx1f(i) * pcoord->dx2f(j) * pcoord->dx3f(k));
-                Real vr = 0.,vth = 0., vphi = 0., cs = 0.;
-                if (ifflat || iftab){
-		  if (r1<=std::max(rstar,dr)){
-                        if (ifflat){
-                            dencurrent = dnorm ;
-                            pcurrent = (1.-SQR(r1/rscale)) * pnorm ;
-                        }
-                        else{
-			  //                            if (iftab){
-			  instar_interpolate(instar_radius, instar_lrho, instar_lpress, instar_mass, r1 / rscale * instar_rmax, dr / rscale * instar_rmax, &dencurrent, &pcurrent) ; // * pcoord->dx1f(i));
-			  dencurrent *= dnorm ;
-			  pcurrent *= pnorm ;
-			      //}
-                        }
-		  }else{
-                        dencurrent = 0. ;
-                        pcurrent = 0.;
-                    }
-                }
-                else{
-                    // n=5 solution
-		  dencurrent = dnorm * std::pow(1.+SQR(r1/std::max(rscale,dr))/3., -2.5) * SmoothStep(-(r1-rcutoff)/std::max(drcutoff,dr));
-		  pcurrent = pnorm * std::pow(1.+SQR(r1/std::max(rscale,dr))/3., -3.0) * SmoothStep(-(r1-rcutoff)/std::max(drcutoff,dr));
-                }
-                // vr = vth = vphi = 0.; // maybe we will do something to the velocities
-                // Real vxr = (vr * x/r1 + vth * cth1 * cos(phi1) - vphi * sin(phi1)) ;
-                // Real vyr = (vr * y/r1 + vth * cth1 * sin(phi1) + vphi * cos(phi1)) ;
-                // Real vzr = (vr * z/r1 - vth * std::sqrt(1.-cth1*cth1)) ;
-                
-		if (pcurrent >= (rhogas*temp)){
-		  phydro->w(IDN,k,j,i) = dencurrent;
-		  phydro->w(IPR,k,j,i) = pcurrent;
+	      dencurrent = pcurrent = 0.;
+	      Real z = pcoord->x3v(k)-zshift;
+	      Real x = pcoord->x1v(i)-xshift, y = pcoord->x2v(j)-yshift;
+	      Real xf = pcoord->x1f(i), yf = pcoord->x2f(j), zf = pcoord->x3f(k);
+	      ax(k,j,i) = ay(k,j,i) = az(k,j,i) = 0.;
+	      Real r1 = std::sqrt(x*x+y*y+z*z), r2f = std::sqrt(SQR(xf)+SQR(yf)+SQR(zf));;
+	      Real cth1 = z / r1;
+	      Real phi1 = std::atan2(y,x);
+	      Real cth2f = zf / r2f, phi2f = std::atan2(yf,xf);
+	      Real reff = std::sqrt(SQR(x-xBH)+SQR(y-yBH)+SQR(z-zBH));
+	      Real PhiBH =  - rvirBH / (reff-2.*rgrav);
+	      if (reff<(3.*rgrav)){
+		PhiBH = (- 1.5 + SQR(reff/rgrav)/6.) * rvirBH / rgrav;
+	      }
+	      PhiBH += rvirBH / (reff0-2.*rgrav); // zeroing at the star centre
+	      Real rhogas = bgdrho * std::exp(std::max(std::min(rvir * (-1./std::sqrt(rscale*rscale+drsq) + 1./std::sqrt(r1*r1+drsq)), std::log(dnorm/bgdrho)-2.),-30.));
+	      Real dx = pcoord->dx1f(i), dy = pcoord->dx2f(j), dz = pcoord->dx3f(k);
+	      Real dr = std::sqrt(SQR(dx)+SQR(dy)+SQR(dz)), dv = std::fabs(dx*dy*dz);
+	      // Real dr = std::sqrt(SQR(pcoord->dx1f(i))+SQR(pcoord->dx2f(j))+SQR(pcoord->dx3f(k))), dv = std::fabs(pcoord->dx1f(i) * pcoord->dx2f(j) * pcoord->dx3f(k));
+	      Real vr = 0.,vth = 0., vphi = 0., cs = 0.;
+	      if (ifflat || iftab){
+		if (r1<=(rstar+dr)){
+		  if (ifflat){
+		    dencurrent = dnorm ;
+		    pcurrent = std::max(1.-SQR(r1/rscale), 0.) * pnorm ;
+		  }
+		  else{
+		    //                            if (iftab){
+		    instar_interpolate(instar_radius, instar_lrho, instar_lpress, instar_mass, r1 / rscale * instar_rmax, dr / rscale * instar_rmax, &dencurrent, &pcurrent) ; // * pcoord->dx1f(i));
+		    dencurrent *= dnorm ;
+		    pcurrent *= pnorm ;
+		    //}
+		  }
+		}else{
+		  dencurrent = 0. ;
+		  pcurrent = 0.;
+		}
+	      }
+	      else{
+		// n=5 solution
+		dencurrent = dnorm * std::pow(1.+SQR(r1/std::max(rscale,dr))/3., -2.5) * SmoothStep(-(r1-rcutoff)/std::max(drcutoff,dr));
+		pcurrent = pnorm * std::pow(1.+SQR(r1/std::max(rscale,dr))/3., -3.0) * SmoothStep(-(r1-rcutoff)/std::max(drcutoff,dr));
+	      }
+	      // vr = vth = vphi = 0.; // maybe we will do something to the velocities
+	      // Real vxr = (vr * x/r1 + vth * cth1 * cos(phi1) - vphi * sin(phi1)) ;
+	      // Real vyr = (vr * y/r1 + vth * cth1 * sin(phi1) + vphi * cos(phi1)) ;
+	      // Real vzr = (vr * z/r1 - vth * std::sqrt(1.-cth1*cth1)) ;
+              
+	      if (pcurrent >= (rhogas*temp)){
+		phydro->w1(IPR, k,j,i) = phydro->w(IDN,k,j,i) = dencurrent;
+		phydro->w1(IPR, k,j,i) = phydro->w(IPR,k,j,i) = pcurrent;
+	      }
+	      else{
+		phydro->w1(IPR, k,j,i) = phydro->w(IDN,k,j,i) = rhogas;
+		phydro->w1(IPR, k,j,i) = phydro->w(IPR,k,j,i) = rhogas * temp ;		  
+	      }
+	      if (phydro->w(IPR,k,j,i) > (bgdrho * temp)){
+		std::cout<< "P = " << phydro->w(IPR,k,j,i) << "\n";
+	      }
+	      //                 phydro->w(IDN,k,j,i) = std::max(dencurrent, rhogas);
+	      // phydro->w(IPR,k,j,i) = std::max(pcurrent, rhogas*temp);
+	      phydro->w1(IPR, k,j,i) = phydro->w(IM1,k,j,i) = 0.;
+	      phydro->w1(IPR, k,j,i) = phydro->w(IM2,k,j,i) = 0.;
+	      phydro->w1(IPR, k,j,i) = phydro->w(IM3,k,j,i) = 0.;
+              
+	      // tracer:
+	      if (NSCALARS>0){
+		constexpr int scalar_norm = NSCALARS > 0 ? NSCALARS : 1.0;
+		Real d0 = phydro->w(IDN,k,j,i);
+		if (r1<(rstar+dr)){
+		  for (int n=0; n<NSCALARS; ++n) {
+		    pscalars->s(n,k,j,i) = d0*1.0/scalar_norm;
+		    pscalars->r(n,k,j,i) = 1.0;
+		    //              pscalars->r(n, k, j, i) = 1.0;
+		  }
+		  starmass_empirical += dencurrent * dv ;
 		}
 		else{
-                  phydro->w(IDN,k,j,i) = rhogas;
-                  phydro->w(IPR,k,j,i) = rhogas * temp ;		  
+		  for (int n=0; n<NSCALARS; ++n) {
+		    pscalars->s(n,k,j,i) = d0*0.0/scalar_norm;
+		    pscalars->r(n,k,j,i) = 0.0;
+		  }
 		}
-		//                 phydro->w(IDN,k,j,i) = std::max(dencurrent, rhogas);
-		// phydro->w(IPR,k,j,i) = std::max(pcurrent, rhogas*temp);
-                phydro->w(IM1,k,j,i) = 0.;
-                phydro->w(IM2,k,j,i) = 0.;
-                phydro->w(IM3,k,j,i) = 0.;
-                
-                // tracer:
-                if (NSCALARS>0){
-                   constexpr int scalar_norm = NSCALARS > 0 ? NSCALARS : 1.0;
-                   Real d0 = phydro->w(IDN,k,j,i);
-                   if (r1<std::max(rstar,dr)){
-                     for (int n=0; n<NSCALARS; ++n) {
-                       pscalars->s(n,k,j,i) = d0*1.0/scalar_norm;
-                       starmass_empirical += dencurrent * dv ;
-                       //              pscalars->r(n, k, j, i) = 1.0;
-                     }
-                   }
-                   else{
-                     for (int n=0; n<NSCALARS; ++n) {
-                       pscalars->s(n,k,j,i) = d0*0.0/scalar_norm;
-                       // pscalars->r(n,k,j,i) = 0.0;
-                     }
-                     //              pscalars->s(0,k,j,i) = 0.;
-                   }
-                 }
-
-                //  magnetic fields (vector potentials)
-                if((magbeta > 0.) && MAGNETIC_FIELDS_ENABLED){
-                    if (lharm <= 0){ // toroidal field
-                        // Real rc = std::sqrt(SQR(xf)+SQR(yf)); // cylindric radius
-                        // az(k,j,i) = azfun(rc, zf);
-                        // vector potential at the boundaries:
-                        for(int di = -1; di<=1; di++){
-                            for(int dj = -1; dj<=1; dj++){
-                                for(int dk = -1; dk<=1; dk++){
-                                    Real xf1, yf1, zf1;
-                                    if (di == -1)xf1 = xf - dx;
-                                    if (di == 0)xf1 = xf;
-                                    if (di == 1)xf1 = xf + dx;
-                                    if (dj == -1)yf1 = yf - dy;
-                                    if (dj == 0)yf1 = yf;
-                                    if (dj == 1)yf1 = yf + dy;
-                                    if (dk == -1)zf1 = zf - dz;
-                                    if (dk == 0)zf1 = zf;
-                                    if (dk == 1)zf1 = zf + dz;
-                                    //                    Real yf1 = yf +(Real)dj * dy;
-                                    // Real zf1 = zf +(Real)dk * dz;
-                                    // rc = std::sqrt(SQR(xf1)+SQR(yf1));
-                                    
-                                    if(ifinclined){
-                                        Real zf1i = zf1 * cthA + (xf1 * std::cos(phiA) + yf1 * std::sin(phiA)) * sthA ; // zf1 in the inclined frame
-                                        //  Real xf1i = (zf1-zf1i * cthA) / sthA ;
-                                        // Real yf1i = yf1 * std::cos(phiA) - xf1 * std::sin(phiA) ;
-                                        Real azd = azfun(std::sqrt(SQR(xf1)+SQR(yf1)+SQR(zf1)-SQR(zf1i)), zf1i);
-                                        az(k+dk,j+dj,i+di) = azd * cthA;
-                                        ax(k+dk,j+dj,i+di) = azd * sthA * std::cos(phiA);
-                                        ay(k+dk,j+dj,i+di) = azd * sthA * std::sin(phiA);
-                                        // if ((zf1i < 1.0) && (std::fabs(az(k+dk,j+dj,i+di)) > 0.))std::cout << "Az = " << az(k+dk,j+dj,i+di) << std::endl;
-                                    }
-                                    else{
-                                        az(k+dk,j+dj,i+di) = azfun(std::sqrt(SQR(xf1)+SQR(yf1)), zf1);
-                                        // if (az(k+dk,j+dj,i+di) > 0.)std::cout << "Az = " << az(k+dk,j+dj,i+di) << std::endl;
-                                    }
-                                    
-                                }
-                            }
-                        }
-                    }
-                    else{
-                        Real aphi = psi_AB(r2f, cth2f, phi2f);
-                        for(int di = -1; di<=1; di++){
-                            for(int dj = -1; dj<=1; dj++){
-                                for(int dk = -1; dk<=1; dk++){
-                                    // Real xf1 = xf + (Real)di * dx;
-                                    // Real yf1 = yf + (Real)dj * dy;
-                                    // Real zf1 = zf + (Real)dk * dz;
-                                    Real xf1, yf1, zf1;
-                                    if (di == -1)xf1 = xf - dx;
-                                    if (di == 0)xf1 = xf;
-                                    if (di == 1)xf1 = xf + dx;
-                                    if (dj == -1)yf1 = yf - dy;
-                                    if (dj == 0)yf1 = yf;
-                                    if (dj == 1)yf1 = yf + dy;
-                                    if (dk == -1)zf1 = zf - dz;
-                                    if (dk == 0)zf1 = zf;
-                                    if (dk == 1)zf1 = zf + dz;
-                                    
-                                    r2f = std::sqrt(SQR(xf1)+SQR(yf1)+SQR(zf1));
-                                    
-                                    Real cth1f = zf1 / r2f; // theta in lab frame
-                                    Real sth1f = std::sqrt(1.-std::min(SQR(cth1f),cthsqmax)) ;
-                                    
-                                    if (ifinclined){
-                                        cth2f = (zf1 * cthA + (xf1 * cos(phiA) + yf1 * sin(phiA)) * sthA) / r2f; // theta in inclined frame
-                                        phi2f = std::atan2(yf1,xf1); // obviously, the expression should be different; do we need this angle?
-                                    }
-                                    else{
-                                        cth2f = cth1f;
-                                        phi2f = std::atan2(yf1,xf1);
-                                    }
-                                    
-                                    aphi = psi_AB(r2f, cth2f, phi2f);
-                                   //  std::cout << "Aphi = " << aphi << std::endl;
-                                    if (ifinclined){
-                                        Real sth2f = std::sqrt(1.-std::min(SQR(cth2f),cthsqmax)) ; // |\mu \times R|/R
-                                        Real mx = sthA * std::cos(phiA), my = sthA * std::sin(phiA), mz = cthA;
-                                        Real mrx = (my * cth1f - mz * std::sin(phi2f) * sth1f) / sth2f, mry = (mz * sth1f * std::cos(phi2f)- mx * cth1f) / sth2f, mrz = -sth1f * (my * std::cos(phi2f)-mx * std::sin(phi2f)) / sth2f;
-                                        ax(k+dk,j+dj,i+di) = mrx * aphi ;
-                                        ay(k+dk,j+dj,i+di) = mry * aphi ;
-                                        az(k+dk,j+dj,i+di) = mrz * aphi ;
-                                        // (sthA * std::sin(phiA) * cth2f - cthA * sth2f * std::sin(phi2f) ) / sth2f * aphi ;
-                                        // ay(k+dk,j+dj,i+di) = (cthA * sth2f * std::cos(phi2f) - cth2f * sthA * std::sin(phiA) ) / sth2f * aphi ;
-                                        // az(k+dk,j+dj,i+di) = sthA * (std::sin(phiA) * sth2f - sth2f * std::sin(phiA) * sth2f * std::cos(phi2f) ) / sth2f * aphi ;
-                                    }
-                                    else{
-                                        ax(k+dk,j+dj,i+di) = -aphi * std::sin(phi2f) ;
-                                        ay(k+dk,j+dj,i+di) = aphi * std::cos(phi2f) ;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+	      }
+	      
+	      //  magnetic fields (vector potentials)
+	      if((magbeta > 0.) && MAGNETIC_FIELDS_ENABLED){
+		if (lharm <= 0){ // toroidal field
+		  // Real rc = std::sqrt(SQR(xf)+SQR(yf)); // cylindric radius
+		  // az(k,j,i) = azfun(rc, zf);
+		  // vector potential at the boundaries:
+		  for(int di = -1; di<=1; di++){
+		    for(int dj = -1; dj<=1; dj++){
+		      for(int dk = -1; dk<=1; dk++){
+			Real xf1, yf1, zf1;
+			if (di == -1)xf1 = xf - dx;
+			if (di == 0)xf1 = xf;
+			if (di == 1)xf1 = xf + dx;
+			if (dj == -1)yf1 = yf - dy;
+			if (dj == 0)yf1 = yf;
+			if (dj == 1)yf1 = yf + dy;
+			if (dk == -1)zf1 = zf - dz;
+			if (dk == 0)zf1 = zf;
+			if (dk == 1)zf1 = zf + dz;
+			//                    Real yf1 = yf +(Real)dj * dy;
+			// Real zf1 = zf +(Real)dk * dz;
+			// rc = std::sqrt(SQR(xf1)+SQR(yf1));
+                        
+			if(ifinclined){
+			  Real zf1i = zf1 * cthA + (xf1 * std::cos(phiA) + yf1 * std::sin(phiA)) * sthA ; // zf1 in the inclined frame
+			  //  Real xf1i = (zf1-zf1i * cthA) / sthA ;
+			  // Real yf1i = yf1 * std::cos(phiA) - xf1 * std::sin(phiA) ;
+			  Real azd = azfun(std::sqrt(SQR(xf1)+SQR(yf1)+SQR(zf1)-SQR(zf1i)), zf1i);
+			  az(k+dk,j+dj,i+di) = azd * cthA;
+			  ax(k+dk,j+dj,i+di) = azd * sthA * std::cos(phiA);
+			  ay(k+dk,j+dj,i+di) = azd * sthA * std::sin(phiA);
+			  // if ((zf1i < 1.0) && (std::fabs(az(k+dk,j+dj,i+di)) > 0.))std::cout << "Az = " << az(k+dk,j+dj,i+di) << std::endl;
+			}
+			else{
+			  az(k+dk,j+dj,i+di) = azfun(std::sqrt(SQR(xf1)+SQR(yf1)), zf1);
+			  // if (az(k+dk,j+dj,i+di) > 0.)std::cout << "Az = " << az(k+dk,j+dj,i+di) << std::endl;
+			}
+                        
+		      }
+		    }
+		  }
+		}
+		else{
+		  Real aphi = psi_AB(r2f, cth2f, phi2f);
+		  for(int di = -1; di<=1; di++){
+		    for(int dj = -1; dj<=1; dj++){
+		      for(int dk = -1; dk<=1; dk++){
+			// Real xf1 = xf + (Real)di * dx;
+			// Real yf1 = yf + (Real)dj * dy;
+			// Real zf1 = zf + (Real)dk * dz;
+			Real xf1, yf1, zf1;
+			if (di == -1)xf1 = xf - dx;
+			if (di == 0)xf1 = xf;
+			if (di == 1)xf1 = xf + dx;
+			if (dj == -1)yf1 = yf - dy;
+			if (dj == 0)yf1 = yf;
+			if (dj == 1)yf1 = yf + dy;
+			if (dk == -1)zf1 = zf - dz;
+			if (dk == 0)zf1 = zf;
+			if (dk == 1)zf1 = zf + dz;
+                        
+			r2f = std::sqrt(SQR(xf1)+SQR(yf1)+SQR(zf1));
+                        
+			Real cth1f = zf1 / r2f; // theta in lab frame
+			Real sth1f = std::sqrt(1.-std::min(SQR(cth1f),cthsqmax)) ;
+                        
+			if (ifinclined){
+			  cth2f = (zf1 * cthA + (xf1 * cos(phiA) + yf1 * sin(phiA)) * sthA) / r2f; // theta in inclined frame
+			  phi2f = std::atan2(yf1,xf1); // obviously, the expression should be different; do we need this angle?
+			}
+			else{
+			  cth2f = cth1f;
+			  phi2f = std::atan2(yf1,xf1);
+			}
+                        
+			aphi = psi_AB(r2f, cth2f, phi2f);
+			//  std::cout << "Aphi = " << aphi << std::endl;
+			if (ifinclined){
+			  Real sth2f = std::sqrt(1.-std::min(SQR(cth2f),cthsqmax)) ; // |\mu \times R|/R
+			  Real mx = sthA * std::cos(phiA), my = sthA * std::sin(phiA), mz = cthA;
+			  Real mrx = (my * cth1f - mz * std::sin(phi2f) * sth1f) / sth2f, mry = (mz * sth1f * std::cos(phi2f)- mx * cth1f) / sth2f, mrz = -sth1f * (my * std::cos(phi2f)-mx * std::sin(phi2f)) / sth2f;
+			  ax(k+dk,j+dj,i+di) = mrx * aphi ;
+			  ay(k+dk,j+dj,i+di) = mry * aphi ;
+			  az(k+dk,j+dj,i+di) = mrz * aphi ;
+			  // (sthA * std::sin(phiA) * cth2f - cthA * sth2f * std::sin(phi2f) ) / sth2f * aphi ;
+			  // ay(k+dk,j+dj,i+di) = (cthA * sth2f * std::cos(phi2f) - cth2f * sthA * std::sin(phiA) ) / sth2f * aphi ;
+			  // az(k+dk,j+dj,i+di) = sthA * (std::sin(phiA) * sth2f - sth2f * std::sin(phiA) * sth2f * std::cos(phi2f) ) / sth2f * aphi ;
+			}
+			else{
+			  ax(k+dk,j+dj,i+di) = -aphi * std::sin(phi2f) ;
+			  ay(k+dk,j+dj,i+di) = aphi * std::cos(phi2f) ;
+			}
+		      }
+		    }
+		  }
+		}
+	      }
             }
         }
         // std::cout << "z = " << z << std::endl;
     }
-
+    
     clock_t tend = clock();
     float cpu_time = (tend>tstart ? static_cast<Real>(tend-tstart) : 1.0) /
       static_cast<Real>(CLOCKS_PER_SEC);
@@ -576,8 +580,8 @@ int RefinementCondition(MeshBlock *pmb)
 	// Real r1 = std::sqrt(SQR(x)+SQR(y)+SQR(z)); // distance to the star centre
 	Real r = R(0, k, j, i);
 	Real den = w(IDN,k,j,i);
-	maxR0 = std::max(maxR0, R(0, k, j, i));
-	if ((r>Rthresh) && (den>refden)){
+	maxR0 = std::max(maxR0, r);
+	if (r>Rthresh){
 	  Real eps = std::abs(w(IDN,k,j,i+1)+w(IDN,k,j,i-1) - 2. * den) + std::abs(w(IDN,k,j+1,i)+w(IDN,k,j-1,i) - 2. * den) + std::abs(w(IDN,k+1,j,i)+w(IDN,k-1,j,i) - 2. * den);
 	  //std::sqrt(SQR(w(IDN,k,j,i+1)-w(IDN,k,j,i-1))
 	  //	    +SQR(w(IDN,k,j+1,i)-w(IDN,k,j-1,i))
