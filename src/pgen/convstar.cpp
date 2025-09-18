@@ -147,7 +147,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     rgrav = (addmass/1.e6) * 2.1218 ; // GM_{\rm BH}/c^2
     std::cout << "rgrav = " << rgrav << std::endl ;
     rBH = pin->GetReal("problem", "rBH");
-    BHgmax = addmass / SQR(rgrav); // GM/R^2 at R = 3GM/c^2
+    BHgmax = addmass / SQR(rgrav); // GM/R^2 at R = 3GM/c^2 // should I normalize it by rBH??
 
     rper = pin->GetReal("problem","rper"); // pericenter distance for the parabolic orbit
     Mcoeff = std::sqrt(addmass / 2.) * std::pow(rper, -1.5);
@@ -166,12 +166,13 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     thresh = pin->GetOrAddReal("problem","thresh", 0.1); // relative one-cell variation for refinement
 
     // boundary conditions
-    // user-defined BC (outflow for hydro, infinite conductor for B):                                                                                                                                             
+    // user-defined BC (outflow for hydro, infinite conductor for B; useful if for some reason the edges produce zero-divergence violating fields; but actually they should not, hence suggest using outflow BC instead):                                                                                                                                             
     std::string inner_Xboundary = pin->GetString("mesh", "ix1_bc");
     std::string outer_Xboundary = pin->GetString("mesh", "ox1_bc");
     std::string inner_Yboundary = pin->GetString("mesh", "ix2_bc");
     std::string outer_Yboundary = pin->GetString("mesh", "ox2_bc");
-    std::string inner_Zboundary = pin->GetString("mesh", "ix3_bc");                                             std::string outer_Zboundary = pin->GetString("mesh", "ox3_bc");
+    std::string inner_Zboundary = pin->GetString("mesh", "ix3_bc");
+    std::string outer_Zboundary = pin->GetString("mesh", "ox3_bc");
 
     if (inner_Xboundary == "user")EnrollUserBoundaryFunction(BoundaryFace::inner_x1, DumbBoundaryInnerX1);
     if (outer_Xboundary == "user")EnrollUserBoundaryFunction(BoundaryFace::outer_x1, DumbBoundaryOuterX1);
@@ -359,9 +360,9 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 		phydro->w1(IPR, k,j,i) = phydro->w(IDN,k,j,i) = rhogas;
 		phydro->w1(IPR, k,j,i) = phydro->w(IPR,k,j,i) = rhogas * temp ;		  
 	      }
-	      if (phydro->w(IPR,k,j,i) > (bgdrho * temp)){
-		std::cout<< "P = " << phydro->w(IPR,k,j,i) << "\n";
-	      }
+	      // if (phydro->w(IPR,k,j,i) > (bgdrho * temp)){
+	      //	std::cout<< "P = " << phydro->w(IPR,k,j,i) << "\n";
+	      // }
 	      //                 phydro->w(IDN,k,j,i) = std::max(dencurrent, rhogas);
 	      // phydro->w(IPR,k,j,i) = std::max(pcurrent, rhogas*temp);
 	      phydro->w1(IPR, k,j,i) = phydro->w(IM1,k,j,i) = 0.;
